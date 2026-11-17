@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// The production account service: the OAuth issuer and the CLI resource host.
-pub const DEFAULT_ACCOUNT_URL: &str = "https://api.impeccable.style";
+// Fork: no upstream account host. `.invalid` never resolves, and every
+// request is refused before it is built anyway (the account build switch).
+pub const DEFAULT_ACCOUNT_URL: &str = "https://account.oeg-fork.invalid";
 /// The first-party public client the service registers for this CLI.
 pub const CLIENT_ID: &str = "impeccable-cli";
 pub const SCOPES: &str = "account:read rules:read";
@@ -58,14 +60,10 @@ impl Account {
         }
     }
 
-    /// The account's Home in the web app, for production and staging only (a test or
-    /// local service has no known app to point at).
+    /// The account's Home in the web app. Fork: there is no upstream web
+    /// app to point at, so no service has one.
     pub fn home_url(&self) -> Option<&'static str> {
-        match self.issuer.as_str() {
-            DEFAULT_ACCOUNT_URL => Some("https://app.impeccable.style/app"),
-            "https://api.staging.impeccable.style" => Some("https://app.staging.impeccable.style/app"),
-            _ => None,
-        }
+        None
     }
 
     /// The host shown to people (`api.impeccable.style`).
@@ -154,9 +152,9 @@ mod tests {
             at("https://api.staging.impeccable.style").display_name(),
             "Impeccable (api.staging.impeccable.style)"
         );
-        // Catches: a Home link to the wrong app, or to an app a test service doesn't have.
-        assert_eq!(at(DEFAULT_ACCOUNT_URL).home_url(), Some("https://app.impeccable.style/app"));
-        assert_eq!(at("https://api.staging.impeccable.style").home_url(), Some("https://app.staging.impeccable.style/app"));
+        // Fork: no service has a Home link.
+        assert_eq!(at(DEFAULT_ACCOUNT_URL).home_url(), None);
+        assert_eq!(at("https://api.staging.impeccable.style").home_url(), None);
         assert_eq!(at("http://127.0.0.1:9").home_url(), None);
     }
     use super::*;

@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 //! Design health (REN-1559) end to end: `login` asking for `health:write`
 //! only where it's offered, a full `detect` of a git repo uploading a body
 //! the service accepts, every other scan uploading nothing, and the upload

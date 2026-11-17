@@ -274,6 +274,10 @@ fn sniffed_type(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Fork: remote images are never downloaded (build constant).
+pub(crate) const OEG_REMOTE_IMAGES_DISABLED: bool = true;
+const OEG_REMOTE_IMAGES_MSG: &str = "remote images are switched off in the OEG fork (im OEG-Fork deaktiviert); pass a local file";
+
 /// Downloads one png, webp, or jpeg image. The bytes' signature decides the
 /// type and is required: a `200` HTML page behind a `.webp` URL or an image
 /// Content-Type (a soft 404, an auth wall, a proxy interstitial) is refused
@@ -282,6 +286,11 @@ fn sniffed_type(bytes: &[u8]) -> Option<&'static str> {
 /// the caller names the URL.
 pub(crate) fn fetch_image(url: &str, timeout: std::time::Duration, redirects: u32) -> Result<(Vec<u8>, &'static str), String> {
     use std::io::Read;
+    // Fork: no image is downloaded, neither a `--ref` URL nor a world
+    // card. Local files still work.
+    if OEG_REMOTE_IMAGES_DISABLED {
+        return Err(OEG_REMOTE_IMAGES_MSG.into());
+    }
     // One deadline for the whole fetch, redirects included: each hop gets
     // only the time that is left.
     let started = std::time::Instant::now();
@@ -706,6 +715,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: remote images switched off"]
     fn url_refs_are_downloaded_attached_and_recorded_as_urls() {
         let _proxy_lock = crate::http::PROXY_ENV_LOCK.lock().unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -749,6 +759,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: remote images switched off"]
     fn a_failed_url_ref_names_the_url_and_writes_nothing() {
         let _proxy_lock = crate::http::PROXY_ENV_LOCK.lock().unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();

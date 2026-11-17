@@ -2,6 +2,9 @@ use crate::font_render;
 use crate::VERSION;
 use impeccable_common::Io;
 
+/// Fork: font-match stays off (it loads Google Fonts). Build constant.
+const OEG_GOOGLE_FONTS_DISABLED: bool = true;
+
 /// Build-time composition of native scan hooks.
 pub type InstalledPack =
     impeccable_core::rule_pack::RulePackSet<dyn impeccable_html::StaticRulePack>;
@@ -67,6 +70,15 @@ pub fn run(args: &[String], io: &mut Io, pack: InstalledPack) -> i32 {
         "detect" => detect(rest, io, &engines, pack.rule_pack),
         "foundations" => crate::foundations::run(rest, io, &engines, pack.rule_pack),
         "ignores" | "ignore" => impeccable_detect::run_ignores(rest, io),
+        // Fork: sign-in, OAuth, uploads, taste, worlds and Pro end here,
+        // before any account code runs.
+        "login" | "logout" | "whoami" | "status" | "setup" | "setup-report" | "taste-refresh" | "world"
+        | "critiques-refresh" | "critiques" | "health" | "health-design-refresh" | "pro-refresh"
+            if impeccable_account::OEG_ACCOUNT_DISABLED =>
+        {
+            io.err(&format!("impeccable {verb}: {}\n", impeccable_account::OEG_DISABLED_MSG));
+            1
+        }
         // Account sign-in. These never dispatch to the Pro engine.
         "login" => {
             let code = impeccable_account::run_login(rest, io);
@@ -75,7 +87,6 @@ pub fn run(args: &[String], io: &mut Io, pack: InstalledPack) -> i32 {
             if code == 0 && !help {
                 crate::setup_report::schedule(io);
                 scan_after_login(io, &engines, pack.rule_pack);
-                crate::loop_install::after_login(io);
             }
             code
         }
@@ -93,7 +104,11 @@ pub fn run(args: &[String], io: &mut Io, pack: InstalledPack) -> i32 {
         // Background Pro renewal (pro dispatch spawns it). Not in --help.
         "pro-refresh" => impeccable_account::pro::run_refresh(rest, io),
         "skills" => impeccable_skills::run(rest, io),
-        "loop" => crate::loop_install::run(rest, io),
+        // Fork: Loop (a downloaded macOS app plus a remote MCP server) is removed.
+        "loop" => {
+            io.err("impeccable loop: im OEG-Fork entfernt (lädt eine App herunter und verbindet einen entfernten MCP-Server)\n");
+            1
+        }
         "walkthrough" => crate::walkthrough::run(rest, io),
         "agents" => impeccable_agents::run(rest, io),
         "help" | "install" | "link" | "update" | "check" => impeccable_skills::run(args, io),
@@ -108,7 +123,8 @@ pub fn run(args: &[String], io: &mut Io, pack: InstalledPack) -> i32 {
             let code = impeccable_context::critique_storage::run_with_saved(rest, io, &mut |s| {
                 saved = Some(s)
             });
-            if let Some(snapshot) = saved {
+            // Fork: a saved critique is never uploaded.
+            if let Some(snapshot) = saved.filter(|_| !impeccable_account::OEG_ACCOUNT_DISABLED) {
                 let quiet = rest
                     .iter()
                     .any(|a| matches!(a.as_str(), "--quiet" | "--json" | "-json" | "--github"));
@@ -132,7 +148,13 @@ pub fn run(args: &[String], io: &mut Io, pack: InstalledPack) -> i32 {
         // comp-fidelity verbs (crates/comp-verbs over crates/comp)
         "comp-spec" => impeccable_comp_verbs::run_comp_spec(rest, io),
         "comp-diff" => impeccable_comp_verbs::run_comp_diff(rest, io),
+        // Fork: font-match renders its candidates from Google Fonts in a
+        // headless browser, a network fetch the fork does not make.
         "font-match" => {
+            if OEG_GOOGLE_FONTS_DISABLED {
+                io.err("impeccable font-match: im OEG-Fork deaktiviert (lädt Schriften von Google Fonts)\n");
+                return 1;
+            }
             let mut renderer = font_render::CdpFontRenderer::from_process_env();
             impeccable_comp_verbs::run_font_match(rest, io, &mut renderer)
         }
@@ -213,7 +235,8 @@ fn detect(
     use std::io::Write;
     // Most runs can't upload (not signed in, CI, opted out): those don't
     // pay for a report.
-    if !impeccable_account::health::wanted(io) {
+    // Fork: a scan is never uploaded.
+    if impeccable_account::OEG_ACCOUNT_DISABLED || !impeccable_account::health::wanted(io) {
         return impeccable_detect::cli::run_detect_with_pack(args, io, engines, rule_pack);
     }
     let started = std::time::SystemTime::now();

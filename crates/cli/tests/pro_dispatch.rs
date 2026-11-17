@@ -32,6 +32,7 @@ fn run(
 }
 
 #[test]
+#[ignore = "Fork: Pro dispatch switched off"]
 fn scans_dispatch_to_the_pro_build_except_where_guarded() {
     // Catches: a Pro child re-dispatching (a loop), $IMPECCABLE_BIN losing precedence, non-scan verbs dispatching.
     let fake = Fake::start();

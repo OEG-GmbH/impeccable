@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 //! `impeccable login --no-browser`, `whoami` and `logout` as a script drives
 //! them, against the fake account service.
 #[path = "../../account/tests/support/fake.rs"]

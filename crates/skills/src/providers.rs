@@ -5,7 +5,9 @@
 
 use crate::util::{self, jsp, Env};
 
-pub const API_BASE: &str = "https://impeccable.style";
+// Fork: no upstream site. `.invalid` never resolves, and bundle.rs
+// refuses every download before a request is built.
+pub const API_BASE: &str = "https://bundle.oeg-fork.invalid";
 
 pub const PROVIDER_DIRS: &[&str] = &[
     ".claude", ".cursor", ".devin", ".dsh", ".gemini", ".agents", ".agent", ".github", ".grok", ".hermes", ".kiro",

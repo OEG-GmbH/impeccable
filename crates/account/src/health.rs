@@ -1137,6 +1137,7 @@ mod taste_notice_tests {
     use crate::test_fake::{browser, Fake};
 
     #[test]
+    #[ignore = "Fork: account service switched off"]
     fn foreground_scan_notices_an_old_taste_grant_once_and_honors_quiet() {
         let fake = Fake::start();
         {

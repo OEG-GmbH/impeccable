@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 mod support;
 use impeccable_account::{config::Account, login, setup};
 use impeccable_common::Io;

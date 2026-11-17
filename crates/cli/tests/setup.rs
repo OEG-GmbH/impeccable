@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 #[path = "../../account/tests/support/fake.rs"]
 mod fake;
 use fake::{browser, Fake};

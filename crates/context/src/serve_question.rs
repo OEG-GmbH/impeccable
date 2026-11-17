@@ -657,14 +657,14 @@ fn kept_world_card(cwd: &str, id: &str, kind: &str) -> Option<String> {
 /// the roll record, a project file an API response fed, and `--start` fetches
 /// them unasked, so a crafted record must not turn it into a probe of
 /// loopback, link-local, or private services: a URL is fetched only when it
-/// sits under the configured card base (`IMPECCABLE_CARD_BASE`, else
-/// impeccable.style's), or is `https` to a named public-looking host (no IP
+/// sits under the configured card base (`IMPECCABLE_CARD_BASE`; the fork
+/// has no default), or is `https` to a named public-looking host (no IP
 /// address in any spelling, no userinfo, no single-label, `localhost`,
 /// `.local` or `.internal` name). Card fetches follow no redirect either. A URL that
 /// fails this is still listed, by URL, for the agent to judge.
 fn card_fetch_allowed(env: &Env, url: &str) -> bool {
     let base = crate::concept_seed::card_base(env);
-    if url.starts_with(&format!("{}/", base.trim_end_matches('/'))) {
+    if !base.is_empty() && url.starts_with(&format!("{}/", base.trim_end_matches('/'))) {
         return true;
     }
     let Some(rest) = url.strip_prefix("https://") else { return false };
@@ -1078,6 +1078,24 @@ fn comp_is_this_hands(cwd: &str, comp: &str, hand: Option<&Map<String, Value>>) 
     }
 }
 
+/// The CSP of the decision page itself (`/`). Fork: `hero`, `board` and
+/// `comp` may hold an http(s) URL that `image_src` passes into the markup, so
+/// images load only from this server (`/img/{n}`) or inline; a blocked image
+/// shows the page's "artwork unavailable" state. Scripts and styles stay as
+/// they are.
+const PAGE_CSP: &str = "img-src 'self' data: blob:";
+
+/// The CSP a served sketch gets. Fork: no external source at all (the
+/// upstream policy allowed Google Fonts stylesheets and font files), so a
+/// sketch that links a web font loads nothing from outside.
+fn sketch_csp(raw: bool) -> String {
+    format!(
+        "default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data: blob:; script-src {}; connect-src 'none'; base-uri 'none'; form-action 'none'; {}; frame-ancestors 'self'",
+        if raw { "'none'" } else { "'unsafe-inline'" },
+        if raw { "sandbox" } else { "sandbox allow-scripts" }
+    )
+}
+
 /// A declared sketch is this hand's when its file exists and was written after
 /// the hand began, or differs from the file that sat there then. The write
 /// time is what lets an identical rewrite count: a sketch has no generated
@@ -1235,10 +1253,10 @@ fn schema_json() -> Value {
       "title": "Choose the visual world",
       "question": "The roll assigned Fillmore Handbill. Keep it, take an alternate, or re-roll.",
       "options": [
-        { "id": "assigned", "kind": "assigned", "label": "Fillmore Handbill", "kicker": "THE ROLL", "lineage": "1966-71 Fillmore psychedelic handbills", "thesis": "The gig poster that treats every release like a one-night stand.", "palette": ["#e8452c", "#f5d64c", "#1b2a52", "#f3ead8"], "materials": ["letterpress", "split-fountain ink"], "viewport": "A full-bleed dated bill with the product name in warped display type.", "risk": "Reads nostalgic when the type is set timidly.", "raised": [{ "from": "challenger-microfiche", "raise": "The bill now owns its whole viewport as one continuous printed sheet." }], "comp": ".impeccable/mocks/decision/assigned.webp", "hero": "https://impeccable.style/worlds/cards/posters-covers-sleeves-fillmore-handbill-hero.webp", "board": "https://impeccable.style/worlds/cards/posters-covers-sleeves-fillmore-handbill.webp" },
+        { "id": "assigned", "kind": "assigned", "label": "Fillmore Handbill", "kicker": "THE ROLL", "lineage": "1966-71 Fillmore psychedelic handbills", "thesis": "The gig poster that treats every release like a one-night stand.", "palette": ["#e8452c", "#f5d64c", "#1b2a52", "#f3ead8"], "materials": ["letterpress", "split-fountain ink"], "viewport": "A full-bleed dated bill with the product name in warped display type.", "risk": "Reads nostalgic when the type is set timidly.", "raised": [{ "from": "challenger-microfiche", "raise": "The bill now owns its whole viewport as one continuous printed sheet." }], "comp": ".impeccable/mocks/decision/assigned.webp", "hero": ".impeccable/mocks/worlds/posters-covers-sleeves-fillmore-handbill-hero.webp", "board": ".impeccable/mocks/worlds/posters-covers-sleeves-fillmore-handbill.webp" },
         { "id": "model-pick", "kind": "pick", "label": "The Broadside Ballad", "kicker": "IMPECCABLE’S PICK", "lineage": "street-sold ballad sheets", "thesis": "Every release printed as the day’s ballad sheet.", "palette": ["#1f1c18", "#efe5d0", "#a33327"], "materials": ["woodcut", "rag paper"], "viewport": "One tall sheet, the newest release as today’s ballad.", "risk": "Also the direction most runs in this category land on.", "comp": ".impeccable/mocks/decision/model-pick.webp" },
-        { "id": "challenger-teletext", "kind": "challenger", "catalogId": "broadcast-programming-teletext-service", "label": "Teletext Service", "verdict": "competitive", "lineage": "broadcast teletext magazines", "thesis": "The catalog as a broadcast index: pages, not sections.", "palette": ["#0000c0", "#ffff00", "#00c000", "#ffffff"], "materials": ["block mosaic", "phosphor glow"], "viewport": "P100 index page, releases as numbered rows.", "case": "Fuses cleanly: releases map to numbered pages; loses narrowly on clarity.", "risk": "Reads retro-novelty when the grid is not strict.", "comp": ".impeccable/mocks/decision/challenger-teletext.webp", "hero": "https://impeccable.style/worlds/cards/broadcast-programming-teletext-service-hero.webp" },
-        { "id": "challenger-microfiche", "kind": "challenger", "catalogId": "archives-microfiche-reader", "label": "Microfiche Reader", "verdict": "declined", "lineage": "library microfiche stations", "palette": ["#101418", "#9fb4c0"], "materials": ["film grain", "backlit glass"], "case": "Fuses poorly: listeners do not identify with archival retrieval.", "kept": "Total environmental commitment.", "hero": "https://impeccable.style/worlds/cards/archives-microfiche-reader-hero.webp" }
+        { "id": "challenger-teletext", "kind": "challenger", "catalogId": "broadcast-programming-teletext-service", "label": "Teletext Service", "verdict": "competitive", "lineage": "broadcast teletext magazines", "thesis": "The catalog as a broadcast index: pages, not sections.", "palette": ["#0000c0", "#ffff00", "#00c000", "#ffffff"], "materials": ["block mosaic", "phosphor glow"], "viewport": "P100 index page, releases as numbered rows.", "case": "Fuses cleanly: releases map to numbered pages; loses narrowly on clarity.", "risk": "Reads retro-novelty when the grid is not strict.", "comp": ".impeccable/mocks/decision/challenger-teletext.webp", "hero": ".impeccable/mocks/worlds/broadcast-programming-teletext-service-hero.webp" },
+        { "id": "challenger-microfiche", "kind": "challenger", "catalogId": "archives-microfiche-reader", "label": "Microfiche Reader", "verdict": "declined", "lineage": "library microfiche stations", "palette": ["#101418", "#9fb4c0"], "materials": ["film grain", "backlit glass"], "case": "Fuses poorly: listeners do not identify with archival retrieval.", "kept": "Total environmental commitment.", "hero": ".impeccable/mocks/worlds/archives-microfiche-reader-hero.webp" }
       ],
       "reroll": { "registers": ["safer", "bolder"] },
       "buildPath": { "value": "comp", "toggle": true },
@@ -1701,7 +1719,7 @@ pub fn run(argv: &[String], io: &mut Io) -> i32 {
                 }
             }
             let html = st.page(st.awaiting_next);
-            request.respond(&Response::new(200).header("content-type", "text/html; charset=utf-8").text(&html));
+            request.respond(&Response::new(200).header("content-type", "text/html; charset=utf-8").header("content-security-policy", PAGE_CSP).text(&html));
             continue;
         }
         if method == "POST" && path == "/heartbeat" {
@@ -1765,15 +1783,12 @@ pub fn run(argv: &[String], io: &mut Io) -> i32 {
                 Some(text) => {
                     // A sketch is agent-written HTML served on the page's own
                     // origin, so it never gets that origin: the CSP sandboxes it
-                    // and closes every network path but its fonts. The skeleton
+                    // and closes every network path (Fork: Google Fonts
+                    // too, a sketch uses local or data: fonts). The skeleton
                     // view runs the injected pass; the raw view runs nothing.
                     let raw = query_param(&query, "raw").is_some();
                     let body = if raw { text } else { with_skeleton(&text) };
-                    let csp = format!(
-                        "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src data: blob:; script-src {}; connect-src 'none'; base-uri 'none'; form-action 'none'; {}; frame-ancestors 'self'",
-                        if raw { "'none'" } else { "'unsafe-inline'" },
-                        if raw { "sandbox" } else { "sandbox allow-scripts" }
-                    );
+                    let csp = sketch_csp(raw);
                     let mut resp = Response::new(200).text(&body);
                     for (k, v) in [("content-type", "text/html; charset=utf-8"), ("cache-control", "no-store"), ("x-content-type-options", "nosniff"), ("referrer-policy", "no-referrer"), ("content-security-policy", csp.as_str())] {
                         resp = resp.header(k, v);
@@ -2601,6 +2616,25 @@ impl ServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review: a served sketch may load nothing from outside,
+    /// Google Fonts included, in both views.
+    #[test]
+    fn sketch_csp_allows_no_external_source() {
+        for raw in [false, true] {
+            let csp = sketch_csp(raw);
+            assert!(!csp.contains("http"), "{csp}");
+            assert!(!csp.contains("googleapis") && !csp.contains("gstatic"), "{csp}");
+            for directive in csp.split(';').map(str::trim) {
+                for source in directive.split_whitespace().skip(1) {
+                    assert!(
+                        ["'none'", "'self'", "'unsafe-inline'", "data:", "blob:", "allow-scripts"].contains(&source),
+                        "{directive}: {source}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn question_page_uses_system_fonts_and_inline_branding() {
@@ -3572,6 +3606,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: remote images switched off"]
     fn next_line_fetches_and_names_the_dealt_worlds_card_images() {
         let _proxy_lock = crate::http::PROXY_ENV_LOCK.lock().unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -3622,6 +3657,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: remote images switched off"]
     fn a_card_that_cannot_be_fetched_is_named_by_url_and_fails_nothing() {
         let _proxy_lock = crate::http::PROXY_ENV_LOCK.lock().unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -4065,7 +4101,42 @@ mod tests {
         assert_eq!(server.join().unwrap(), 0);
     }
 
+    /// Review: a remote `hero` URL reaches the decision page's
+    /// markup, so the page itself must forbid images from other hosts.
     #[test]
+    fn the_decision_page_loads_images_only_from_itself() {
+        let dir = temp_project("page-csp");
+        let qdir = dir.join(".impeccable/questions");
+        let remote = "https://images.example.invalid/hero.webp";
+        let payload = json!({ "options": [{ "id": "a", "label": "A", "hero": remote }, { "id": "b", "label": "B" }] });
+        std::fs::write(dir.join("payload.json"), payload.to_string()).unwrap();
+        let cwd = dir.clone();
+        let server = std::thread::spawn(move || {
+            let (mut io, _cap) = Io::captured("", cwd, Env::from([("IMPECCABLE_SELF".to_string(), "impeccable".to_string())]));
+            let argv: Vec<String> = ["--payload", "payload.json", "--detached-serve", "--key", "pk", "--timeout", "0", "--no-open"].iter().map(|s| s.to_string()).collect();
+            run(&argv, &mut io)
+        });
+        let deadline = now_ms() + 5000.0;
+        let port = loop {
+            if let Some(p) = read_state(&qdir.to_string_lossy(), "pk").and_then(|s| s.get("port").and_then(Value::as_u64)) {
+                break p;
+            }
+            assert!(now_ms() < deadline, "server never wrote its state");
+            sleep_ms(20);
+        };
+        let res = ureq::get(&format!("http://127.0.0.1:{port}/")).call().unwrap();
+        let csp = res.header("content-security-policy").map(str::to_string);
+        let html = res.into_string().unwrap();
+        assert!(html.contains(remote), "the case under test: the remote URL is in the markup");
+        assert_eq!(csp.as_deref(), Some(PAGE_CSP));
+        let img_src = PAGE_CSP.split(';').map(str::trim).find(|d| d.starts_with("img-src")).unwrap();
+        assert!(!img_src.contains("http") && !img_src.contains('*'), "{img_src}");
+        ureq::post(&format!("http://127.0.0.1:{}/answer?key=pk", port)).send_string(&json!({ "optionId": "a" }).to_string()).unwrap();
+        assert_eq!(server.join().unwrap(), 0);
+    }
+
+    #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn the_page_sends_the_choice_ping_itself_and_the_agent_rerun_becomes_a_no_op() {
         let dir = temp_project("picker-ping");
         let cwd = dir.to_string_lossy().to_string();

@@ -21,13 +21,18 @@ pub(crate) fn trusted_keys() -> Result<TrustedKeys, String> {
         .map_err(|_| "Invalid compiled bundle signing keyring".into())
 }
 
+/// Fork: the skill bundle comes from the plugin marketplace, never
+/// from an upstream release, and every download is refused in `bundle`. The
+/// prefix names no real host (`.invalid` never resolves).
+pub(crate) const RELEASE_PREFIX: &str = "https://releases.oeg-fork.invalid/skill-v";
+
 pub(crate) fn release_version(location: &str) -> Result<String, String> {
     let version = location
-        .strip_prefix("https://github.com/pbakaus/impeccable/releases/download/skill-v")
+        .strip_prefix(RELEASE_PREFIX)
         .and_then(|s| s.strip_suffix("/universal.zip"))
         .filter(|v| v.len() <= 128 && VERSION.is_match(v));
     version.map(str::to_string).ok_or_else(|| {
-        "Bundle download must redirect to a versioned Impeccable GitHub release".into()
+        "Bundle download must redirect to a versioned Impeccable release".into()
     })
 }
 
@@ -212,7 +217,7 @@ mod tests {
 
     #[test]
     fn release_location_is_exact_and_versioned() {
-        let prefix = "https://github.com/pbakaus/impeccable/releases/download/";
+        let prefix = "https://releases.oeg-fork.invalid/";
         assert_eq!(
             release_version(&format!("{prefix}skill-v4.2.0/universal.zip")).unwrap(),
             "4.2.0"
@@ -222,9 +227,9 @@ mod tests {
             format!("{prefix}skill-v4.2.0/universal.zip?key=x"),
             format!("{prefix}skill-v4.2.0/universal.zip#x"),
             format!("{prefix}skill-v04.2.0/universal.zip"),
-            "http://github.com/pbakaus/impeccable/releases/download/skill-v4.2.0/universal.zip".into(),
-            "https://github.com/attacker/impeccable/releases/download/skill-v4.2.0/universal.zip".into(),
-            "https://github.com.evil.test/pbakaus/impeccable/releases/download/skill-v4.2.0/universal.zip".into(),
+            "http://releases.oeg-fork.invalid/skill-v4.2.0/universal.zip".into(),
+            "https://github.com/pbakaus/impeccable/releases/download/skill-v4.2.0/universal.zip".into(),
+            "https://releases.oeg-fork.invalid.evil.test/skill-v4.2.0/universal.zip".into(),
         ] {
             assert!(release_version(&bad).is_err(), "{bad}");
         }

@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 //! Taste reads use the fake issuer and file credentials only.
 mod support;
 use impeccable_account::{config::Account, login, session::Session, store::Store, taste};

@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 //! Pro refresh and the offline dispatch decision, against the fake service.
 mod support;
 use impeccable_account::config::Account;

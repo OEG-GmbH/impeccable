@@ -5,14 +5,15 @@ use serde_json::{json, Value};
 use std::process::{Command, Stdio};
 
 pub fn schedule(io: &Io) {
-    if !impeccable_account::setup::wanted(io) {
+    // Fork: no detached account worker.
+    if impeccable_account::OEG_ACCOUNT_DISABLED || !impeccable_account::setup::wanted(io) {
         return;
     }
     spawn_refresh(io, "setup-report");
 }
 
 pub fn schedule_taste(io: &Io) {
-    if impeccable_account::taste::wanted(io) {
+    if !impeccable_account::OEG_ACCOUNT_DISABLED && impeccable_account::taste::wanted(io) {
         spawn_refresh(io, "taste-refresh");
     }
 }

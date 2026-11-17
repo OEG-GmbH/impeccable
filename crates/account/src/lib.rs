@@ -27,6 +27,12 @@ pub mod taste;
 mod upload_notice;
 pub mod world;
 
+/// Fork: the account service (sign-in, Pro, uploads, taste, worlds) is
+/// switched off in the build. No environment variable or config turns it on.
+pub const OEG_ACCOUNT_DISABLED: bool = true;
+/// What a disabled verb or request reports.
+pub const OEG_DISABLED_MSG: &str = "im OEG-Fork deaktiviert (kein Konto, kein Netzzugriff)";
+
 use config::Account;
 use impeccable_common::Io;
 use session::{Entitlement, Session, SessionError};

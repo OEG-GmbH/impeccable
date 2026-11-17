@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 //! A renewal that drops `taste:read` takes the cached rules with it.
 //! Fake issuer and file credentials only.
 mod support;

@@ -531,6 +531,7 @@ mod review_regressions {
         std::fs::remove_dir_all(account.home).unwrap();
     }
     #[test]
+    #[ignore = "Fork: account service switched off"]
     fn taste_loader_keeps_renewal_noninteractive() {
         let fake = crate::test_fake::Fake::start();
         fake.knobs.lock().unwrap().taste = true;

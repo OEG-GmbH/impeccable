@@ -125,7 +125,9 @@ fn api_base(env: &Env) -> String {
 }
 
 pub(crate) fn card_base(env: &Env) -> String {
-    env.get("IMPECCABLE_CARD_BASE").filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| "https://impeccable.style/worlds/cards".to_string())
+    // Fork: no default card host; without IMPECCABLE_CARD_BASE a card has
+    // only the images its catalog entry names.
+    env.get("IMPECCABLE_CARD_BASE").filter(|v| !v.is_empty()).cloned().unwrap_or_default()
 }
 
 /// URLSearchParams serialization (application/x-www-form-urlencoded).
@@ -141,7 +143,14 @@ fn form_encode(s: &str) -> String {
     out
 }
 
+/// Fork: the roll service is never asked. A roll deals from a local
+/// catalog (`IMPECCABLE_CATALOG_DIR`) when one exists, else it runs degraded.
+pub(crate) const OEG_ROLL_SERVICE_DISABLED: bool = true;
+
 fn fetch_roll(env: &Env, cwd: &str, budget: &mut ApiBudget, scope: &str, key: &str, mode: Option<&str>, grain: Option<&str>, platform: Option<&str>, reroll: usize, settled: bool) -> Option<Value> {
+    if OEG_ROLL_SERVICE_DISABLED {
+        return None;
+    }
     let mut params = vec![("scope", scope.to_string()), ("key", key.to_string()), ("reroll", reroll.to_string())];
     if let Some(m) = mode {
         params.push(("mode", m.to_string()));
@@ -325,8 +334,9 @@ fn render_challenger(env: &Env, concept: &Value, index: usize) -> String {
 fn challenger_card(env: &Env, concept: &Value) -> (String, String, String) {
     let cb = card_base(env);
     let id = vs(concept, "id");
-    let board = concept.get("cardBoard").filter(|v| crate::staleness::js_truthy(v)).map(value_str).unwrap_or_else(|| format!("{}/{}.webp", cb, id));
-    let hero = concept.get("cardHero").filter(|v| crate::staleness::js_truthy(v)).map(value_str).unwrap_or_else(|| format!("{}/{}-hero.webp", cb, id));
+    let derived = |suffix: &str| if cb.is_empty() { String::new() } else { format!("{}/{}{}.webp", cb, id, suffix) };
+    let board = concept.get("cardBoard").filter(|v| crate::staleness::js_truthy(v)).map(value_str).unwrap_or_else(|| derived(""));
+    let hero = concept.get("cardHero").filter(|v| crate::staleness::js_truthy(v)).map(value_str).unwrap_or_else(|| derived("-hero"));
     (id, board, hero)
 }
 
@@ -1359,6 +1369,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn settled_rolls_skip_world_only_api_requests_and_keep_composition_headers() {
         let (proj, skill) = fixture("settled-api", &[("mode-persuade", MODE_FILE)]);
         std::fs::write(proj.join("DESIGN.md"), "---\nworld: teletext-service\n---\n").unwrap();
@@ -1397,6 +1408,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn api_rolls_send_the_client_header_and_record_the_pool_revision() {
         let (proj, skill) = fixture("api-roll", &[("mode-persuade", MODE_FILE)]);
         let (base, seen) = roll_api();
@@ -1420,6 +1432,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn agent_pings_fill_the_round_from_the_ledger_and_send_only_dealt_ids() {
         let (proj, skill) = fixture("api-ping", &[("mode-persuade", MODE_FILE)]);
         let (base, seen) = roll_api();
@@ -1449,6 +1462,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn agent_pings_report_rejected_hands_and_cards_by_position() {
         let (proj, skill) = fixture("api-ping-reroll", &[("mode-persuade", MODE_FILE)]);
         let (base, seen) = roll_api();
@@ -1470,6 +1484,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn a_seed_reference_stands_for_its_key_on_the_machine_that_rolled_it() {
         let (proj, skill) = fixture("seed-reference", &[("mode-persuade", MODE_FILE)]);
         let (base, seen) = roll_api();
@@ -1502,6 +1517,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn opted_out_rolls_still_roll_and_tell_the_server_to_record_nothing() {
         let (proj, skill) = fixture("opt-out", &[("mode-persuade", MODE_FILE)]);
         let (base, seen) = roll_api();
@@ -1569,6 +1585,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: roll service and telemetry switched off"]
     fn a_key_keeps_one_salt_one_ledger_and_one_reference_across_every_salt_switch() {
         // (name, home for round 0, what changes, home for round 1)
         #[derive(Clone, Copy)]

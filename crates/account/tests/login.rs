@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 //! Sign-in lifecycle against a fake account service on 127.0.0.1.
 mod support;
 use impeccable_account::session::{Session, SessionError};

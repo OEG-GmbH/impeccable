@@ -735,11 +735,15 @@ pub fn js_parse_int(s: &str) -> Option<i64> {
 }
 
 fn fetch_latest_skill_version(env: &Env) -> Option<String> {
+    // Fork: no update check, whatever the environment says.
+    if crate::telemetry::OEG_PHONE_HOME_DISABLED {
+        return None;
+    }
     let host = env
         .get("IMPECCABLE_UPDATE_HOST")
         .filter(|v| !v.is_empty())
         .cloned()
-        .unwrap_or_else(|| "https://impeccable.style".to_string());
+        .unwrap_or_else(|| "https://update.oeg-fork.invalid".to_string());
     let host = host.strip_suffix('/').unwrap_or(&host).to_string();
     let url = format!("{}/api/version", host);
     let agent = crate::http::agent_builder(&url)
@@ -775,6 +779,12 @@ fn update_check_disabled_by_config(cwd: &str) -> bool {
 
 /// JS: computeUpdateDirective()
 pub fn compute_update_directive(cwd: &str, env: &Env, provider: &Provider) -> Option<String> {
+    // Fork: no update notice at all, also not from an update-check.json
+    // an earlier upstream install left behind. Updates come through the
+    // plugin marketplace, never `npx impeccable update`.
+    if crate::telemetry::OEG_PHONE_HOME_DISABLED {
+        return None;
+    }
     if env.get("IMPECCABLE_NO_UPDATE_CHECK").map(|v| !v.is_empty()).unwrap_or(false) {
         return None;
     }
@@ -1747,6 +1757,32 @@ mod hook_not_installed_tests {
         let fixture = Fixture::new("claude-code");
         fixture.put("project/PRODUCT.md", "# App\n\n## Platform\n\nios\n");
         assert!(fixture.findings().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod fork_update_notice_tests {
+    /// Review: an update-check.json left by an upstream install,
+    /// fresh and naming a newer version, yields no update notice.
+    #[test]
+    fn a_cached_newer_version_gives_no_update_notice() {
+        let dir = std::env::temp_dir().join(format!("impeccable-fork-update-{}", std::process::id()));
+        let skill = dir.join("skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: impeccable\nversion: 1.0.0\n---\n").unwrap();
+        let cache = dir.join("update-check.json");
+        let now = crate::util::now_ms() as i64;
+        std::fs::write(&cache, format!("{{\"lastCheck\":{now},\"latestVersion\":\"99.0.0\"}}")).unwrap();
+        let env = crate::util::Env::from([
+            ("IMPECCABLE_SKILL_DIR".to_string(), skill.to_string_lossy().into_owned()),
+            ("IMPECCABLE_UPDATE_CACHE".to_string(), cache.to_string_lossy().into_owned()),
+            ("HOME".to_string(), dir.to_string_lossy().into_owned()),
+        ]);
+        let cwd = dir.to_string_lossy().into_owned();
+        let provider = crate::provider::detect(&env, &cwd);
+        assert_eq!(super::read_local_skill_version(&provider).as_deref(), Some("1.0.0"), "the test skill version must be read");
+        assert_eq!(super::compute_update_directive(&cwd, &env, &provider), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

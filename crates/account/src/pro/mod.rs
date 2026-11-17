@@ -681,9 +681,10 @@ pub enum Decision {
 
 pub const WHY_NOT_READY: &str = "Pro rules aren't ready yet; using the open rules.";
 /// Where a person without Pro can see the plans: the one live pricing page (launch CTA audit, 11 Nov 2026).
-pub const PRICING: &str = "See impeccable.style/pricing";
+/// Fork: Pro is not available, so no pricing link.
+pub const PRICING: &str = "Pro is not available in the OEG fork.";
 pub const WHY_NOT_ENTITLED: &str =
-    "Pro rules are off: this account doesn't include them. See impeccable.style/pricing";
+    "Pro rules are off: this account doesn't include them. Pro is not available in the OEG fork.";
 pub const WHY_EXPIRED: &str =
     "Pro rules are off until your Pro access refreshes, on your next scan while online; using the open rules.";
 pub const WHY_UNVERIFIED: &str =
@@ -801,6 +802,10 @@ fn due(paths: &Paths, at: u64, every: u64) -> bool {
 /// is the Pro child's exit code; `None` means run the open engine (after
 /// any line this printed).
 pub fn dispatch(args: &[String], io: &mut Io) -> Option<i32> {
+    // Fork: never hand off to a Pro build, whatever the environment says.
+    if crate::OEG_ACCOUNT_DISABLED {
+        return None;
+    }
     if io
         .env("IMPECCABLE_PRO_CHILD")
         .is_some_and(|v| !v.is_empty())

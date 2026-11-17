@@ -1,3 +1,5 @@
+// Fork: service switched off, behaviour is covered in crates/cli/tests/fork_no_network.rs.
+#![cfg(any())]
 //! Feature scopes compose and stay attached to the original grant.
 mod support;
 use impeccable_account::{config::Account, http::ApiError, login, session::Session};

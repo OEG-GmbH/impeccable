@@ -40,8 +40,13 @@ pub const MAX_REROLL: usize = 8;
 /// The highest zero-based card position the choice ping reports.
 pub const MAX_OPTION: usize = 15;
 
+/// Fork: telemetry (`/api/chosen`), the update check (`/api/version`)
+/// and the account taste read are switched off in the build. No environment
+/// variable or config turns them on.
+pub const OEG_PHONE_HOME_DISABLED: bool = true;
+
 pub fn api_base(env: &Env) -> String {
-    let base = env.get("IMPECCABLE_API_URL").filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| "https://impeccable.style/api".to_string());
+    let base = env.get("IMPECCABLE_API_URL").filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| "https://api.oeg-fork.invalid".to_string());
     base.strip_suffix('/').unwrap_or(&base).to_string()
 }
 
@@ -75,6 +80,9 @@ fn config_says_off(path: &str) -> bool {
 /// `config.local.json` (a project may opt everyone out; nothing opts back in
 /// over an off anywhere).
 pub fn opt_out_reason(env: &Env, cwd: &str) -> Option<String> {
+    if OEG_PHONE_HOME_DISABLED {
+        return Some("the OEG fork switches telemetry off in the build".to_string());
+    }
     for var in ["DO_NOT_TRACK", "IMPECCABLE_NO_TELEMETRY"] {
         if env_opts_out(env.get(var)) {
             return Some(format!("{} is set", var));
@@ -596,7 +604,7 @@ impl ChoicePing {
 /// POSTs the ping to `/api/chosen` within `timeout`. Never fails the
 /// caller: any error is a false.
 pub fn send_choice(env: &Env, cwd: &str, ping: &ChoicePing, timeout: Duration) -> bool {
-    if timeout.is_zero() {
+    if OEG_PHONE_HOME_DISABLED || timeout.is_zero() {
         return false;
     }
     let url = format!("{}/chosen", api_base(env));
@@ -727,7 +735,8 @@ pub fn picker_choice(seed: &Value, payload: &Value, option_id: &str, steer: Opti
 
 // ---- `impeccable telemetry off|on|status` -------------------------------------
 
-pub const PRIVACY_URL: &str = "https://impeccable.style/privacy";
+/// Fork: no upstream privacy page; telemetry never leaves the machine.
+pub const PRIVACY_URL: &str = "none, the OEG fork sends no telemetry";
 
 fn status_line(env: &Env, cwd: &str) -> String {
     match opt_out_reason(env, cwd) {
@@ -1167,6 +1176,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: telemetry switched off in the build"]
     fn opt_outs_follow_the_env_convention_and_both_configs() {
         let cwd = temp_dir("optout");
         let home = format!("{}/home", cwd);
@@ -1196,6 +1206,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: telemetry switched off in the build"]
     fn the_telemetry_verb_records_the_choice_in_the_user_config() {
         let cwd = temp_dir("verb");
         let home = format!("{}/home", cwd);
@@ -1223,6 +1234,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: telemetry switched off in the build"]
     fn a_project_opt_out_counts_from_a_subdirectory() {
         let root = temp_dir("optout-root");
         std::fs::create_dir_all(format!("{}/.git", root)).unwrap();

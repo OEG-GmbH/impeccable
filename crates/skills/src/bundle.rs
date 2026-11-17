@@ -56,6 +56,12 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// set.
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Fork: skill bundles, the command list and engine binaries are never
+/// downloaded. Both transport entry points below refuse before any request.
+pub const OEG_DOWNLOADS_DISABLED: bool = true;
+/// What a refused download reports.
+pub const OEG_DOWNLOAD_MSG: &str = "downloads are switched off in the OEG fork (im OEG-Fork deaktiviert); the skill comes from the OEG plugin marketplace";
+
 fn download_agent(url: &str, connect: std::time::Duration, idle: std::time::Duration) -> ureq::AgentBuilder {
     impeccable_context::http::agent_builder(url)
         .timeout_connect(connect)
@@ -79,6 +85,9 @@ fn describe_io_error(e: &std::io::Error, url: &str, idle: std::time::Duration) -
 /// through `download_file`, which streams to disk. Reads are capped at
 /// [`MAX_DOWNLOAD_BYTES`]; a longer response is an error, not a truncation.
 pub fn download(url: &str) -> Result<Vec<u8>, String> {
+    if OEG_DOWNLOADS_DISABLED {
+        return Err(OEG_DOWNLOAD_MSG.to_string());
+    }
     // Redirects are followed hop by hop so each host gets its own proxy choice.
     match impeccable_context::http::get_following(url, 5, |b| {
         b.timeout_connect(CONNECT_TIMEOUT).timeout_read(IDLE_TIMEOUT).timeout_write(IDLE_TIMEOUT)
@@ -118,6 +127,9 @@ fn ureq_fetch(url: &str) -> Result<FetchResponse, String> {
 /// One transport hop with a connect timeout and an idle timeout, and no cap
 /// on the whole transfer (see [`IDLE_TIMEOUT`]).
 fn ureq_fetch_with(url: &str, connect: std::time::Duration, idle: std::time::Duration) -> Result<FetchResponse, String> {
+    if OEG_DOWNLOADS_DISABLED {
+        return Err(OEG_DOWNLOAD_MSG.to_string());
+    }
     let agent = download_agent(url, connect, idle).redirects(0).build();
     match agent.get(url).call() {
         Ok(res) => Ok(FetchResponse {
@@ -419,8 +431,6 @@ fn host_owner(host: &str) -> (&str, Option<&'static str>) {
         || host.ends_with(".githubusercontent.com");
     if github {
         ("GitHub", Some("https://www.githubstatus.com"))
-    } else if host == "impeccable.style" || host.ends_with(".impeccable.style") {
-        ("impeccable.style", None)
     } else {
         (host, None)
     }
@@ -475,10 +485,6 @@ impl std::fmt::Display for BundleError {
             BundleError::Unpack(e) => write!(f, "Could not unpack skill bundle: {e}{RETRY}"),
             BundleError::Local(e) => f.write_str(e),
             BundleError::Outage { host, status } => match host_owner(host) {
-                ("impeccable.style", _) => write!(
-                    f,
-                    "Could not download skill bundle: impeccable.style's download service is failing right now (HTTP {status}). Nothing was installed. This is on our side, not your setup. Try again in a few minutes; if it keeps failing, report it at https://github.com/pbakaus/impeccable/issues/new"
-                ),
                 (owner, Some(page)) => write!(
                     f,
                     "Could not download skill bundle: {owner}'s downloads are failing right now (HTTP {status} from {host}). Nothing was installed. This is an outage on {owner}'s side, not a problem with your setup or the CLI, so updating won't help. Check {page} and run the same command again once {owner} has recovered."
@@ -1108,6 +1114,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: downloads switched off"]
     fn slow_steady_download_outlasts_the_idle_timeout() {
         // #1115: the whole transfer takes ~3 s, three times the idle limit,
         // and still completes because bytes keep arriving.
@@ -1120,6 +1127,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: downloads switched off"]
     fn stalled_download_fails_with_an_idle_message() {
         let url = slow_server(1, std::time::Duration::from_secs(3));
         let res = ureq_fetch_with(&url, CONNECT_TIMEOUT, std::time::Duration::from_millis(500)).unwrap();
@@ -1238,7 +1246,7 @@ mod tests {
 
     #[test]
     fn transport_and_staging_failures_name_their_step() {
-        let release = "https://github.com/pbakaus/impeccable/releases/download/skill-v4.2.0/universal.zip";
+        let release = "https://releases.oeg-fork.invalid/skill-v4.2.0/universal.zip";
         struct Stalled;
         impl Read for Stalled {
             fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
@@ -1277,9 +1285,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: upstream release hosts removed, downloads switched off"]
     fn a_server_error_says_whose_outage_it_is() {
         // Catches (#1340, #1341): GitHub answering 504 for hours, told to users as "retry or update the CLI", as if their setup or the CLI were at fault.
-        let release = "https://github.com/pbakaus/impeccable/releases/download/skill-v4.2.0/universal.zip";
+        let release = "https://releases.oeg-fork.invalid/skill-v4.2.0/universal.zip";
         let storage = "https://release-assets.githubusercontent.com/github-production-release-asset/1";
         for (failing, who, page) in [
             ("release-assets.githubusercontent.com", "GitHub", Some("https://www.githubstatus.com")),
@@ -1330,7 +1339,7 @@ mod tests {
                 if requests > 1 { return Err("reached signature download".into()); }
                 Ok(FetchResponse {
                     status,
-                    location: Some("https://github.com/pbakaus/impeccable/releases/download/skill-v4.2.0/universal.zip".into()),
+                    location: Some("https://releases.oeg-fork.invalid/skill-v4.2.0/universal.zip".into()),
                     body: Box::new(std::io::empty()),
                 })
             };
@@ -1365,7 +1374,7 @@ mod tests {
             "schema": 1, "keyId": "test-only", "version": "4.2.0", "artifact": "universal.zip",
             "size": zip.len(), "sha256": digest, "signature": hex(key.sign(payload.as_bytes()).as_ref()),
         })).unwrap();
-        let release = "https://github.com/pbakaus/impeccable/releases/download/skill-v4.2.0/universal.zip";
+        let release = "https://releases.oeg-fork.invalid/skill-v4.2.0/universal.zip";
         for case in ["valid", "tampered", "missing", "oversized", "downgrade", "malformed-zip", "invalid-signature"] {
             let root = tmp_dir(case);
             let temp = format!("{root}/temp");

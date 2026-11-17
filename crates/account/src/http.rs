@@ -91,6 +91,10 @@ impl Client {
     }
 
     fn checked(&self, url: &str) -> Result<(), ApiError> {
+        // Fork: every account request is refused before it is built.
+        if crate::OEG_ACCOUNT_DISABLED {
+            return Err(ApiError::Network(crate::OEG_DISABLED_MSG.into()));
+        }
         if config::on_origin(url, &self.origin) {
             Ok(())
         } else {
@@ -334,6 +338,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: account service switched off"]
     fn requests_off_the_account_origin_are_refused() {
         let account = Account {
             issuer: "http://127.0.0.1:1".into(),

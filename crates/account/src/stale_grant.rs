@@ -172,6 +172,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fork: account service switched off"]
     fn taste_is_offered_and_noticed_once_for_an_older_sign_in() {
         use crate::http::Client;
         use std::io::{Read, Write};

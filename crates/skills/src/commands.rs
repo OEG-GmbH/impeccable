@@ -6,7 +6,7 @@
 use impeccable_common::Io;
 use serde_json::Value;
 
-use crate::bundle::{self, download};
+use crate::bundle;
 use crate::engine_binary::install_engine_binaries;
 use crate::hook_manifest::{self, copy_provider_hooks, hook_installed_for_provider, hook_installed_for_provider_at_scope, HOOK_EXPLAINER};
 use crate::prompt::{CheckboxOption, Prompt, RadioOption};
@@ -89,14 +89,25 @@ fn hook_paths_line(sys: &Sys, dests: &[String]) -> String {
 // ─── help ────────────────────────────────────────────────────────────────────
 
 /// JS: showHelp()
+/// The bundled command metadata (`{"<id>": {"description", …}}`) in the
+/// shape `/api/commands` answered: `[{"id", "description"}]`.
+fn local_commands() -> Option<Vec<Value>> {
+    let meta: Value = serde_json::from_str(impeccable_context::pin::COMMAND_METADATA_JSON).ok()?;
+    let map = meta.as_object()?;
+    Some(
+        map.iter()
+            .map(|(id, m)| serde_json::json!({ "id": id, "description": m.get("description").and_then(Value::as_str).unwrap_or("") }))
+            .collect(),
+    )
+}
+
+/// Fork: the command list comes from the command metadata compiled into
+/// the engine (`skill/scripts/command-metadata.json`), not from `/api/commands`.
 fn show_help(io: &mut Io) -> R<()> {
-    let commands: Vec<Value> = match download(&format!("{API_BASE}/api/commands"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-    {
-        Some(Value::Array(a)) => a,
+    let commands: Vec<Value> = match local_commands() {
+        Some(a) if !a.is_empty() => a,
         _ => {
-            err(io, "Could not fetch command list from impeccable.style. Check your network connection.");
+            err(io, "Could not read the command list from the bundled command metadata.");
             return Err(Flow::Exit(1));
         }
     };
@@ -108,7 +119,7 @@ fn show_help(io: &mut Io) -> R<()> {
     out(io, "  Install:  npx impeccable install");
     out(io, "  Link:     npx impeccable link --source=.impeccable");
     out(io, "  Update:   npx impeccable update");
-    out(io, "  Docs:     https://impeccable.style/cheatsheet\n");
+    out(io, "  Docs:     the skill's reference/ folder\n");
     out(io, &format!("  {} Description", pad("Command", 22)));
     out(io, &format!("  {} {}", "-".repeat(22), "-".repeat(52)));
 
@@ -1080,6 +1091,27 @@ fn update(flags: &[String], io: &mut Io) -> R<()> {
             Err(Flow::Exit(1))
         }
         Err(other) => Err(other),
+    }
+}
+
+#[cfg(test)]
+mod fork_help_tests {
+    //! Review F4: help lists the commands from the bundled metadata, offline.
+
+    #[test]
+    fn help_lists_every_bundled_command_without_network() {
+        let meta: serde_json::Value = serde_json::from_str(impeccable_context::pin::COMMAND_METADATA_JSON).unwrap();
+        let ids: Vec<&String> = meta.as_object().unwrap().keys().collect();
+        assert!(ids.len() > 10, "{ids:?}");
+        for args in [vec![], vec!["help".to_string()], vec!["--help".to_string()]] {
+            let (mut io, captured) = impeccable_common::Io::captured("", std::env::temp_dir(), Default::default());
+            assert_eq!(crate::run(&args, &mut io), 0, "{args:?}: {}", String::from_utf8_lossy(&captured.stderr.borrow()));
+            let out = String::from_utf8_lossy(&captured.stdout.borrow()).into_owned();
+            for id in &ids {
+                assert!(out.contains(&format!("/{id}")), "{args:?}: /{id} missing");
+            }
+            assert!(out.contains(&format!("{} commands available", ids.len())), "{out}");
+        }
     }
 }
 
