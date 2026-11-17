@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 import { readSourceFiles } from '../scripts/lib/utils.js';
 import { createTransformer, PROVIDERS } from '../scripts/lib/transformers/index.js';
@@ -72,10 +73,24 @@ describe('VS Code skill extension', () => {
     fs.cpSync(path.join(extension, 'skills/impeccable'), installed, { recursive: true });
     const project = path.join(scratch, 'user project');
     fs.mkdirSync(project);
-    const probe = path.join(scratch, 'probe engine');
-    fs.writeFileSync(probe, '#!/bin/sh\nprintf "%s\\n" "$PWD" "$IMPECCABLE_SKILL_DIR" "$IMPECCABLE_SELF" "$@"\n', { mode: 0o755 });
-    const launcher = path.join(installed, 'scripts/impeccable');
-    const env = { ...process.env, IMPECCABLE_BIN: probe };
+    // Fork: the launcher runs only bin/<os>-<arch>/ next to it, when the
+    // manifest next to it lists its sha256 (no IMPECCABLE_BIN).
+    const scripts = path.join(installed, 'scripts');
+    const target = `${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
+    const probeBody = '#!/bin/sh\nprintf "%s\\n" "$PWD" "$IMPECCABLE_SKILL_DIR" "$IMPECCABLE_SELF" "$@"\n';
+    const probe = path.join(scripts, 'bin', target, 'impeccable');
+    fs.mkdirSync(path.dirname(probe), { recursive: true });
+    for (const d of [scripts, path.join(scripts, 'bin'), path.dirname(probe)]) fs.chmodSync(d, 0o755);
+    fs.writeFileSync(probe, probeBody);
+    fs.chmodSync(probe, 0o755);
+    const version = fs.readFileSync(path.join(scripts, 'VERSION'), 'utf8').trim();
+    const digest = createHash('sha256').update(probeBody).digest('hex');
+    // First: the launcher takes the first line for its version and asset.
+    const manifest = path.join(scripts, 'engine-checksums.txt');
+    fs.writeFileSync(manifest, `${version} impeccable-${target} ${digest}\n${fs.readFileSync(manifest, 'utf8')}`);
+    const launcher = path.join(scripts, 'impeccable');
+    const env = { ...process.env };
+    delete env.IMPECCABLE_BIN;
     delete env.IMPECCABLE_SKILL_DIR;
     delete env.IMPECCABLE_SELF;
     const output = execFileSync(launcher, ['context', '--target', 'a file.html'], { cwd: project, env, encoding: 'utf8' }).trim().split('\n');

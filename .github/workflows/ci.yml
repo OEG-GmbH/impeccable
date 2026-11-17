@@ -269,8 +269,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - name: Exercise Windows launcher downloads and verification
-        run: node --test tests/launcher-download.test.mjs
+      - name: Exercise the cmd launcher contract
+        run: node --test tests/launcher.test.mjs
       - name: Exercise Windows plugin hook commands
         run: node --test tests/hook-build-windows.test.mjs
 

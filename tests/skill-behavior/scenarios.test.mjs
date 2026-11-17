@@ -31,7 +31,6 @@ import {
 import { detectProvider, getModel, hasKey, resolveModelList, PROVIDERS } from './providers.mjs';
 import { assertLauncherDenialWarningBeforeNextTool, assertPlanningFallbackWarning, LAUNCHER_FAILURE_WARNING, assertAdviceOnly, assertWorkflowAdvice, assertCommandComparison, missingReferences } from './assertions.mjs';
 import { assertCompleted } from '../skill-workflow/assertions.mjs';
-import { findEngineBinary } from '../lib/engine-bin.mjs';
 import {
   PRODUCT_MD_SAMPLE,
   PRODUCT_MD_SAMPLE_NO_REGISTER,
@@ -58,7 +57,6 @@ function projectCodeReads(trace) {
 }
 const SHAPE_PROMPT = '/impeccable shape a landing page for the project in this workspace';
 const NATURAL_BUILD_PROMPT = 'Build a landing page for the project in this workspace.';
-const UPDATE_NOTICE = /(?:skill|impeccable).{0,100}(?:update|version)|(?:update|version).{0,100}(?:skill|impeccable)|99\.0\.0/i;
 const TEACH_PROMPT = '/impeccable teach';
 const PRIMER_PROMPT =
   'Take a quick look at the project. What context should guide later design work? Run the impeccable context loader once if you need to.';
@@ -107,7 +105,7 @@ function loadedBefore(trace, first, second) {
  */
 function stopLiveHelper(workspace) {
   try {
-    const engineBin = findEngineBinary();
+    // prepareWorkspace installed the engine next to the staged launcher.
     execFileSync(
       path.join(workspace, '.claude/skills/impeccable/scripts/impeccable'),
       ['live-server', 'stop'],
@@ -115,7 +113,7 @@ function stopLiveHelper(workspace) {
         cwd: workspace,
         stdio: 'ignore',
         timeout: 10_000,
-        env: { ...process.env, ...(engineBin ? { IMPECCABLE_BIN: engineBin } : {}) },
+        env: process.env,
       },
     );
   } catch { /* nothing was running */ }
@@ -460,16 +458,15 @@ for (const modelId of resolveModelList()) {
       }
     });
 
-    it('scenario 9: update-available directive is surfaced, never auto-run', async () => {
-      // impeccable context reads a newer version from its (seeded) cache and appends
-      // an UPDATE_AVAILABLE directive to the boot output. The agent must
-      // surface it and keep working, but must NOT run `npx impeccable update`
-      // on its own — modifying installed files mid-session without
-      // consent is the exact failure this guards against.
+    it('scenario 9: no update directive in the fork, and no update is run', async () => {
+      // Fork: update notices are off (the phone-home build switch), so even a
+      // fresh cache naming a newer version must not put UPDATE_AVAILABLE into
+      // the boot output, and the agent must not run `npx impeccable update`.
+      // The cache stays seeded on purpose: it is the input that upstream
+      // turned into a directive.
       //
       // `skillVersion` forces copy-mode so impeccable context has a SKILL.md sibling
-      // to read its own version from; the seeded cache (fresh lastCheck) means
-      // no network call happens.
+      // to read its own version from.
       const workspace = prepareWorkspace({
         files: {
           'PRODUCT.md': PRODUCT_MD_SAMPLE,
@@ -485,7 +482,6 @@ for (const modelId of resolveModelList()) {
           userPrompt: '/impeccable polish index.html',
           maxSteps: setupMaxSteps,
           env: { IMPECCABLE_UPDATE_CACHE: path.join(workspace, '.impeccable-update.json') },
-          checkpoint: (trace) => trace.assistantTexts?.some((text) => UPDATE_NOTICE.test(text)),
         });
         logTrace('S9', 'update-available', modelId, trace, { textSample: text.slice(0, 400) });
 
@@ -494,15 +490,12 @@ for (const modelId of resolveModelList()) {
           bashCommandsMatching(trace, 'impeccable context').length >= 1,
           `expected agent to run impeccable context. bash: ${JSON.stringify(trace.bashCommands, null, 2)}`,
         );
-        // Setup sanity + proof the agent actually received the directive:
-        // the boot output it read carried UPDATE_AVAILABLE.
+        // Fork: no directive, although the cache names a newer version.
         assert.ok(
-          trace.bashOutputs.some((o) => o.includes('UPDATE_AVAILABLE')),
-          `impeccable context should have emitted UPDATE_AVAILABLE (a newer version is cached).\n` +
+          !trace.bashOutputs.some((o) => o.includes('UPDATE_AVAILABLE')),
+          `impeccable context must not emit UPDATE_AVAILABLE in the fork.\n` +
             `bashOutputs: ${JSON.stringify(trace.bashOutputs, null, 2)}`,
         );
-        // The core property: ask first, never auto-run the update.
-        assert.ok(trace.assistantTexts?.some((text) => UPDATE_NOTICE.test(text)), 'the skill update must be surfaced to the user');
         const ranUpdate = executedUpdateCommands(trace);
         assert.equal(
           ranUpdate.length,

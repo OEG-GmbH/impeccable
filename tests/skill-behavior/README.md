@@ -23,10 +23,11 @@ Requires `~/.config/impeccable/dev.env` (mode 0600) or the environment to hold a
 skipped, not failed.
 
 Also requires the engine binary (`bun run fetch:engine`, or `IMPECCABLE_BIN`).
-The staged skill dir ships the launcher (`scripts/impeccable`); the harness
-exports `IMPECCABLE_BIN` into every bash call the agent makes, so the launcher
-resolves the binary in the generated fixture without a download. Without a
-binary the suites skip.
+The staged skill dir ships the launcher (`scripts/impeccable`). Fork: the
+launcher reads no `IMPECCABLE_BIN`, so the harness copies the binary it finds
+(`IMPECCABLE_BIN` is only where the test looks for it) into the staged
+`scripts/bin/<os>-<arch>/` and lists its digest in the staged
+`engine-checksums.txt`. Without a binary the suites skip.
 
 To run a single scenario against one model:
 

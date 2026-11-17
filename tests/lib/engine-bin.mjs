@@ -7,6 +7,7 @@
  * is picked up without any extra step). Returns null when none exists so a
  * suite can skip cleanly instead of failing on a machine without the engine.
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +32,30 @@ export function findEngineBinary() {
     path.join(REPO_ROOT, 'target', 'release', exe),
   ];
   return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+/**
+ * Make a staged skill copy run `bin` through its launcher. Fork: the
+ * launcher reads no IMPECCABLE_BIN; it runs only `bin/<os>-<arch>/impeccable`
+ * next to it, and only when `engine-checksums.txt` next to it lists the
+ * file's sha256 for the version in `VERSION`. So the binary is copied there
+ * (mode 0755, directories 0755) and its digest goes first in the manifest
+ * copy, ahead of any line for the same version. Returns the copied path.
+ */
+export function installEngine(scriptsDir, bin) {
+  const target = engineTarget();
+  const exe = target.startsWith('windows-') ? 'impeccable.exe' : 'impeccable';
+  const dest = path.join(scriptsDir, 'bin', target, exe);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  for (const d of [scriptsDir, path.join(scriptsDir, 'bin'), path.dirname(dest)]) fs.chmodSync(d, 0o755);
+  fs.copyFileSync(bin, dest);
+  fs.chmodSync(dest, 0o755);
+  const version = fs.readFileSync(path.join(scriptsDir, 'VERSION'), 'utf8').trim();
+  const digest = createHash('sha256').update(fs.readFileSync(dest)).digest('hex');
+  const manifest = path.join(scriptsDir, 'engine-checksums.txt');
+  const rest = fs.existsSync(manifest) ? fs.readFileSync(manifest, 'utf8') : '';
+  fs.writeFileSync(manifest, `${version} impeccable-${target}${exe.endsWith('.exe') ? '.exe' : ''} ${digest}\n${rest}`);
+  return dest;
 }
 
 export const ENGINE_MISSING_MESSAGE =

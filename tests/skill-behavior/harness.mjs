@@ -27,7 +27,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getProviderOptions } from './providers.mjs';
-import { ENGINE_MISSING_MESSAGE, findEngineBinary } from '../lib/engine-bin.mjs';
+import { ENGINE_MISSING_MESSAGE, findEngineBinary, installEngine } from '../lib/engine-bin.mjs';
 import { withoutProviderKeys } from '../lib/dev-keys.mjs';
 import { readSourceFiles, compileProviderBlocks, replacePlaceholders, stripRuleMarkers } from '../../scripts/lib/utils.js';
 import { createTransformer } from '../../scripts/lib/transformers/factory.js';
@@ -110,10 +110,11 @@ export const SKILL_BODY = `Base directory for this skill (workspace-relative): .
  *   own version from that sibling file, so this is required for any scenario
  *   that exercises the update-check path (the source dir has only SKILL.src.md).
  *
- * The launcher in the staged scripts dir needs an engine binary. Every bash
- * call the agent makes gets `IMPECCABLE_BIN` (tests/lib/engine-bin.mjs:
- * `IMPECCABLE_BIN` or `skill/scripts/bin/<os>-<arch>/`), which the launcher
- * honors first, so the staged skill works without a download.
+ * The launcher in the staged scripts dir needs an engine binary. Fork:
+ * the launcher reads no IMPECCABLE_BIN, so the binary findEngineBinary()
+ * finds (tests/lib/engine-bin.mjs) is copied into the staged
+ * `scripts/bin/<os>-<arch>/` with its digest listed in the staged
+ * `engine-checksums.txt` (installEngine). Without one, the launcher exits 3.
  */
 export const ENGINE_BIN = findEngineBinary();
 export { ENGINE_MISSING_MESSAGE };
@@ -123,6 +124,7 @@ export function prepareWorkspace({ files = {}, skillVersion = null } = {}) {
   stageSkill(sourceSkills, dir, { skillsVersion: skillVersion || '' });
   fs.renameSync(path.join(dir, 'skill-behavior', '.claude'), path.join(dir, '.claude'));
   fs.rmdirSync(path.join(dir, 'skill-behavior'));
+  if (ENGINE_BIN) installEngine(path.join(dir, '.claude/skills/impeccable/scripts'), ENGINE_BIN);
   for (const [name, contents] of Object.entries(files)) {
     const target = path.join(dir, name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -188,7 +190,7 @@ function execBash(workspace, command, timeoutMs = 20_000, extraEnv = {}) {
       cwd: workspace,
       // The agent may roll against the live API: tag its roll and choice
       // requests as test traffic so they stay out of the choice dataset.
-      env: { ...shellEnv, ...(ENGINE_BIN ? { IMPECCABLE_BIN: ENGINE_BIN } : {}), IMPECCABLE_QUESTION_DISABLED: '1', IMPECCABLE_TELEMETRY_CHANNEL: 'test' },
+      env: { ...shellEnv, IMPECCABLE_QUESTION_DISABLED: '1', IMPECCABLE_TELEMETRY_CHANNEL: 'test' },
     });
     let stdout = '';
     let stderr = '';
