@@ -16,6 +16,7 @@ pub mod hook;
 pub mod hook_claim;
 pub mod hook_lib;
 pub mod hook_sessions;
+mod oeg_fs;
 mod build_completion;
 mod stop_baseline;
 mod stop_discovery;

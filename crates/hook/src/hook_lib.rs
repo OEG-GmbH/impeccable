@@ -182,6 +182,15 @@ pub fn get_local_config_path(cwd: &str) -> String {
 /// state), so the digest disambiguates while keeping the dir name
 /// human-scannable.
 fn hook_state_dir(cwd: &str) -> String {
+    let (base, dir) = hook_state_parts(cwd);
+    jsp::join(&[&base, &dir])
+}
+
+/// Fork: the state directory as a trusted base (the project, or the
+/// configured `IMPECCABLE_CACHE_ROOT`) plus the one directory the hook owns
+/// below it (`.impeccable`, or the project slug). Writes open that directory
+/// relative to the base without following a symlink (`oeg_fs`).
+fn hook_state_parts(cwd: &str) -> (String, String) {
     let raw = std::env::var("IMPECCABLE_CACHE_ROOT").unwrap_or_default();
     let mut root = impeccable_core::js::trim(&raw).to_string();
     if root.starts_with("~/") || root.starts_with("~\\") || root == "~" {
@@ -213,9 +222,9 @@ fn hook_state_dir(cwd: &str) -> String {
             h.update(resolved.as_bytes());
             format!("{:x}", h.finalize())[..8].to_string()
         };
-        return jsp::join(&[&jsp::resolve(&proc_cwd, &[&root]), &format!("{}-{}", slug, digest)]);
+        return (jsp::resolve(&proc_cwd, &[&root]), format!("{}-{}", slug, digest));
     }
-    jsp::join(&[cwd, ".impeccable"])
+    (cwd.to_string(), ".impeccable".to_string())
 }
 
 pub fn get_cache_path(cwd: &str) -> String {
@@ -669,16 +678,21 @@ pub fn persist_cache(rt: &Runtime, cwd: &str, cache: &Cache) -> bool {
         }
         cache.insert("sessions".into(), Value::Object(next));
     }
-    let target = get_cache_path(cwd);
     ensure_hook_git_excludes(rt, cwd);
-    if std::fs::create_dir_all(jsp::dirname(&target)).is_err() {
+    // Fork: the base (project or IMPECCABLE_CACHE_ROOT) is trusted; the
+    // state directory below it and the cache file are opened relative to
+    // the base without following a symlink, and the cache is replaced by a
+    // temp file plus renameat in that directory (`oeg_fs`).
+    let (base, dir) = hook_state_parts(cwd);
+    if std::fs::create_dir_all(&base).is_err() {
         return false;
     }
-    std::fs::write(
-        &target,
-        serde_json::to_string(&Value::Object(cache)).unwrap_or_default(),
+    crate::oeg_fs::replace_in(
+        &base,
+        &[dir],
+        "hook.cache.json",
+        serde_json::to_string(&Value::Object(cache)).unwrap_or_default().as_bytes(),
     )
-    .is_ok()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2507,24 +2521,42 @@ pub fn write_audit_log(rt: &Runtime, entry: &Map<String, Value>, cwd: &str) -> b
         Some(t) => Some(t.to_string()),
         None => read_config(&base_cwd).audit_log,
     };
+    let from_env = rt.env("IMPECCABLE_HOOK_LOG").is_some_and(|v| !v.is_empty());
     let Some(target) = target.filter(|t| !t.is_empty()) else {
         return false;
     };
-    let expanded = if let Some(rest) = target.strip_prefix("~/") {
+    // Fork: the log is written relative to a trusted base, every path
+    // component below it opened without following a symlink (`oeg_fs`).
+    // The project config is repository content, so `auditLog` there may only
+    // name a path inside the project (relative, no `..`). The operator's
+    // IMPECCABLE_HOOK_LOG may also be `~/…` (base: home) or absolute (base:
+    // the filesystem root).
+    let (base, rest) = if let Some(rest) = target.strip_prefix("~/") {
+        if !from_env {
+            return false;
+        }
         let home = rt
             .env("HOME")
             .filter(|v| !v.is_empty())
-            .or_else(|| rt.env("USERPROFILE").filter(|v| !v.is_empty()))
-            .unwrap_or(".");
-        jsp::join(&[home, rest])
+            .or_else(|| rt.env("USERPROFILE").filter(|v| !v.is_empty()));
+        let Some(home) = home else { return false };
+        (home.to_string(), rest.to_string())
     } else if jsp::is_absolute(&target) {
-        target.clone()
+        if !from_env {
+            return false;
+        }
+        if cfg!(windows) {
+            (target.chars().take(3).collect::<String>(), target.chars().skip(3).collect::<String>())
+        } else {
+            ("/".to_string(), target.trim_start_matches('/').to_string())
+        }
     } else {
-        rt.resolve(&[&base_cwd, &target])
+        (rt.resolve(&[&base_cwd]), target.clone())
     };
-    if std::fs::create_dir_all(jsp::dirname(&expanded)).is_err() {
+    let Some(mut parts) = crate::oeg_fs::components(&rest) else {
         return false;
-    }
+    };
+    let name = parts.pop().unwrap_or_default();
     let mut record = Map::new();
     record.insert("ts".into(), Value::String(iso_now()));
     for (k, v) in entry {
@@ -2534,15 +2566,9 @@ pub fn write_audit_log(rt: &Runtime, entry: &Map<String, Value>, cwd: &str) -> b
         "{}\n",
         serde_json::to_string(&Value::Object(record)).unwrap_or_default()
     );
-    use std::io::Write;
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&expanded)
-    {
-        Ok(mut f) => f.write_all(line.as_bytes()).is_ok(),
-        Err(_) => false,
-    }
+    // An append-only log: opened with O_APPEND | O_NOFOLLOW relative to its
+    // directory's descriptor, no temp file and rename.
+    crate::oeg_fs::append_in(&base, &parts, &name, line.as_bytes())
 }
 
 /// `matchesAnyGlob` re-export for the verbs.

@@ -2047,6 +2047,75 @@ fn run_hook_co_located_styles_and_tiering_config() {
     assert_eq!(audit_str(&res.audit, "platform"), Some("adaptive"));
 }
 
+/// Fork: the cache and the audit log never write through a symlink.
+#[cfg(unix)]
+#[test]
+fn cache_and_audit_log_refuse_symlinks() {
+    use std::os::unix::fs::symlink;
+    let t = Tmp::new();
+    let cwd = t.path();
+    let victim = format!("{cwd}/victim.txt");
+    std::fs::write(&victim, "keep\n").unwrap();
+    let r = rt(&cwd);
+    let cache = read_cache(&cwd);
+    // A symlink at the cache file: the rename replaces the link itself, the
+    // link target is untouched.
+    let target = get_cache_path(&cwd);
+    std::fs::create_dir_all(std::path::Path::new(&target).parent().unwrap()).unwrap();
+    symlink(&victim, &target).unwrap();
+    assert!(persist_cache(&r, &cwd, &cache));
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+    assert!(!std::fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+    // A regular cache file is replaced as before.
+    assert!(persist_cache(&r, &cwd, &cache));
+    assert!(!std::fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+
+    let mut entry = Map::new();
+    entry.insert("event".into(), json!("PostToolUse"));
+    // A symlink at the log file: refused.
+    symlink(&victim, format!("{cwd}/log.ndjson")).unwrap();
+    let r = rt_with(&cwd, env(&[("IMPECCABLE_HOOK_LOG", "log.ndjson")]));
+    assert!(!write_audit_log(&r, &entry, &cwd));
+    // A symlink at the log's directory: refused.
+    std::fs::create_dir_all(format!("{cwd}/real")).unwrap();
+    symlink(format!("{cwd}/real"), format!("{cwd}/linked")).unwrap();
+    let r = rt_with(&cwd, env(&[("IMPECCABLE_HOOK_LOG", "linked/a.ndjson")]));
+    assert!(!write_audit_log(&r, &entry, &cwd));
+    assert!(!std::path::Path::new(&format!("{cwd}/real/a.ndjson")).exists());
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+}
+
+/// Review F3: a symlink higher up the chain, not only at the last
+/// directory, never redirects the audit log or the cache.
+#[cfg(unix)]
+#[test]
+fn audit_log_and_cache_refuse_a_symlink_anywhere_below_the_base() {
+    use std::os::unix::fs::symlink;
+    let t = Tmp::new();
+    let cwd = t.path();
+    let mut entry = Map::new();
+    entry.insert("event".into(), json!("PostToolUse"));
+    std::fs::create_dir_all(format!("{cwd}/real")).unwrap();
+    symlink(format!("{cwd}/real"), format!("{cwd}/linked")).unwrap();
+    // linked/sub/…, with sub a real directory behind the link.
+    std::fs::create_dir_all(format!("{cwd}/real/sub")).unwrap();
+    let r = rt_with(&cwd, env(&[("IMPECCABLE_HOOK_LOG", "linked/sub/a.ndjson")]));
+    assert!(!write_audit_log(&r, &entry, &cwd));
+    assert!(!std::path::Path::new(&format!("{cwd}/real/sub/a.ndjson")).exists());
+    // The same for an absolute operator path through the link.
+    let r = rt_with(&cwd, env(&[("IMPECCABLE_HOOK_LOG", &format!("{cwd}/linked/sub/b.ndjson"))]));
+    assert!(!write_audit_log(&r, &entry, &cwd));
+    assert!(!std::path::Path::new(&format!("{cwd}/real/sub/b.ndjson")).exists());
+    // A symlinked state directory: the cache is never written through it.
+    let t2 = Tmp::new();
+    let cwd2 = t2.path();
+    std::fs::create_dir_all(format!("{cwd2}/elsewhere")).unwrap();
+    symlink(format!("{cwd2}/elsewhere"), format!("{cwd2}/.impeccable")).unwrap();
+    let r2 = rt(&cwd2);
+    assert!(!persist_cache(&r2, &cwd2, &read_cache(&cwd2)));
+    assert!(!std::path::Path::new(&format!("{cwd2}/elsewhere/hook.cache.json")).exists());
+}
+
 #[test]
 fn write_audit_log_targets() {
     let t = Tmp::new();
@@ -2070,13 +2139,24 @@ fn write_audit_log_targets() {
         !write_audit_log(&r2, &entry, "/elsewhere"),
         "no target, no-op"
     );
+    // Fork: the project config is repository content, so its auditLog
+    // may only name a path inside the project; `~/` and absolute paths are
+    // refused there (the operator's IMPECCABLE_HOOK_LOG may still use them).
     t.write(
         ".impeccable/config.json",
         r#"{"hook":{"auditLog":"~/h.ndjson"}}"#,
     );
     let r3 = rt_with("/elsewhere", env(&[("HOME", &cwd)]));
+    assert!(!write_audit_log(&r3, &entry, "/elsewhere"));
+    assert!(!t.exists("h.ndjson"));
+    t.write(".impeccable/config.json", r#"{"hook":{"auditLog":"logs/h.ndjson"}}"#);
     assert!(write_audit_log(&r3, &entry, "/elsewhere"));
-    assert!(t.exists("h.ndjson"));
+    assert!(t.exists("logs/h.ndjson"));
+    t.write(".impeccable/config.json", r#"{"hook":{"auditLog":"../h.ndjson"}}"#);
+    assert!(!write_audit_log(&r3, &entry, "/elsewhere"));
+    let r4 = rt_with("/elsewhere", env(&[("HOME", &cwd), ("IMPECCABLE_HOOK_LOG", "~/home.ndjson")]));
+    assert!(write_audit_log(&r4, &entry, "/elsewhere"));
+    assert!(t.exists("home.ndjson"));
 }
 
 // ── hook-before-edit ──────────────────────────────────────────────────────
