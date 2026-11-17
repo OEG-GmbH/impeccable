@@ -1,7 +1,7 @@
 //! Advisory geometry check, shared by static HTML and rendered DOM scans.
 use crate::checks::rules::RuleHit;
 use crate::color::{parse_any_color, Rgba, COLOR_FUNCTION_NAMES};
-use cssparser::{Parser, ParserInput, Token};
+use cssparser::{ParseError, Parser, Token};
 
 /// Four CSS pixels separates the fixture's deliberate displaced slabs from
 /// its small offset accents. This is a review threshold, not a design standard.
@@ -10,14 +10,13 @@ pub fn check_hard_offset_shadow(shadow: &str, current_color: &str, opacity: f64)
     if !has_shadow(shadow) {
         return Vec::new();
     }
-    let mut input = ParserInput::new(shadow);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(shadow);
     // A malformed layer invalidates the entire CSS declaration, including a
     // matching layer before it. Do not emit findings until every layer parses.
     // Unresolved values likewise cannot establish a visible shadow here.
-    let layers: Result<_, cssparser::ParseError<'_, ()>> = parser.parse_comma_separated(|parser| {
+    let layers: Result<_, ParseError<()>> = parser.parse_comma_separated(|parser| {
         let start = parser.position();
-        let layer = parse_layer(parser, current_color).ok_or_else(|| parser.new_custom_error(()))?;
+        let layer = parse_layer(parser, current_color).ok_or_else(|| ParseError::custom(()))?;
         Ok((parser.slice_from(start), layer))
     });
     let Ok(layers) = layers else {
@@ -73,7 +72,7 @@ fn shadow_color(paint: &str) -> Option<Rgba> {
 // The static CSS serializer can omit whitespace between tokens (0#333 or
 // rgb(0,0,0)4px). Tokenize CSS rather than splitting on spaces, keeping nested
 // color functions whole and rejecting unresolved lengths and unknown paint.
-fn parse_layer(parser: &mut Parser<'_, '_>, current_color: &str) -> Option<ShadowLayer> {
+fn parse_layer(parser: &mut Parser<'_>, current_color: &str) -> Option<ShadowLayer> {
     let mut lengths = Vec::new();
     let mut color = None;
     let mut inset = false;
@@ -130,7 +129,7 @@ fn parse_layer(parser: &mut Parser<'_, '_>, current_color: &str) -> Option<Shado
                 parser
                     .parse_nested_block(|nested| {
                         while nested.next_including_whitespace_and_comments().is_ok() {}
-                        Ok::<_, cssparser::ParseError<'_, ()>>(())
+                        Ok::<_, ParseError<()>>(())
                     })
                     .ok()?;
                 parser.slice_from(start)

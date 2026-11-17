@@ -18,8 +18,11 @@
 //!
 //! Selector parse errors are recorded by the callers (see
 //! `StaticDocument::unsupported_selectors`) for the parity report.
+//!
+//! Deviation from upstream: same `selectors` 0.41 / `cssparser` 0.38 API
+//! migration as `crates/foundation/src/browser/selector.rs` (see the note there).
 
-use cssparser::{match_ignore_ascii_case, CowRcStr, Parser as CssParser, SourceLocation, ToCss};
+use cssparser::{match_ignore_ascii_case, CowRcStr, ParseError, Parser as CssParser, ToCss};
 use ego_tree::NodeRef;
 use html5ever::Namespace;
 use scraper::selector::{CssLocalName, CssString};
@@ -101,7 +104,6 @@ pub enum PseudoClass {
 }
 
 impl NonTSPseudoClassTrait for PseudoClass {
-    type Impl = Impl;
     fn is_active_or_hover(&self) -> bool {
         matches!(
             self,
@@ -128,9 +130,7 @@ impl ToCss for PseudoClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PseudoElement {}
 
-impl PseudoElementTrait for PseudoElement {
-    type Impl = Impl;
-}
+impl PseudoElementTrait for PseudoElement {}
 
 impl ToCss for PseudoElement {
     fn to_css<W: fmt::Write>(&self, dest: &mut W) -> fmt::Result {
@@ -167,7 +167,7 @@ struct SelParser;
 
 impl<'i> parser::Parser<'i> for SelParser {
     type Impl = Impl;
-    type Error = SelectorParseErrorKind<'i>;
+    type Error = SelectorParseErrorKind;
 
     fn parse_is_and_where(&self) -> bool {
         true
@@ -185,9 +185,8 @@ impl<'i> parser::Parser<'i> for SelParser {
 
     fn parse_non_ts_pseudo_class(
         &self,
-        location: SourceLocation,
         name: CowRcStr<'i>,
-    ) -> Result<PseudoClass, cssparser::ParseError<'i, Self::Error>> {
+    ) -> Result<PseudoClass, ParseError<Self::Error>> {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
             "hover" => return Ok(PseudoClass::Dynamic("hover")),
@@ -198,19 +197,17 @@ impl<'i> parser::Parser<'i> for SelParser {
         if let Some(n) = ALIAS_NAMES.iter().find(|n| **n == lower) {
             return Ok(PseudoClass::Alias(n));
         }
-        Err(
-            location.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-                name,
-            )),
-        )
+        Err(ParseError::custom(
+            SelectorParseErrorKind::UnsupportedPseudoClassOrElement,
+        ))
     }
 
-    fn parse_non_ts_functional_pseudo_class<'t>(
+    fn parse_non_ts_functional_pseudo_class(
         &self,
         name: CowRcStr<'i>,
-        parser: &mut CssParser<'i, 't>,
+        parser: &mut CssParser<'i>,
         _after_part: bool,
-    ) -> Result<PseudoClass, cssparser::ParseError<'i, Self::Error>> {
+    ) -> Result<PseudoClass, ParseError<Self::Error>> {
         match_ignore_ascii_case! { &name,
             "contains" | "icontains" => {
                 let start = parser.position();
@@ -236,11 +233,9 @@ impl<'i> parser::Parser<'i> for SelParser {
             },
             _ => {}
         }
-        Err(
-            parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-                name,
-            )),
-        )
+        Err(ParseError::custom(
+            SelectorParseErrorKind::UnsupportedPseudoClassOrElement,
+        ))
     }
 }
 
@@ -265,8 +260,7 @@ impl std::error::Error for SelectorError {}
 impl Selector {
     /// Parse a selector group; `Err` where css-select would throw.
     pub fn parse(text: &str) -> Result<Selector, SelectorError> {
-        let mut input = cssparser::ParserInput::new(text);
-        let mut p = CssParser::new(&mut input);
+        let mut p = CssParser::new(text);
         SelectorList::parse(&SelParser, &mut p, ParseRelative::No)
             .map(|list| Selector { list })
             .map_err(|_| SelectorError(text.to_string()))
@@ -329,7 +323,7 @@ impl<'a> El<'a> {
         for n in self.0.descendants().skip(1) {
             match n.value() {
                 Node::Text(t) => s.push_str(&t.text),
-                Node::Element(e) if e.name.local.as_ref() == "br" => s.push('\n'),
+                Node::Element(e) if &*e.name.local == "br" => s.push('\n'),
                 _ => {}
             }
         }
@@ -526,7 +520,7 @@ mod tests {
             .find(|n| {
                 n.value()
                     .as_element()
-                    .is_some_and(|e| e.name.local.as_ref() == tag)
+                    .is_some_and(|e| &*e.name.local == tag)
             })
             .unwrap();
         El(node)

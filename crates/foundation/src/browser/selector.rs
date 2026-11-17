@@ -22,8 +22,14 @@
 //! - type and attribute-name matching is ASCII-case-insensitive for HTML
 //!   elements and case-sensitive for SVG/MathML, as in an HTML document;
 //! - id and class matching follows the document's quirks mode.
+//!
+//! Deviation from upstream: written against `selectors` 0.41 / `cssparser`
+//! 0.38 (scraper 0.29, html5ever 0.40), which dropped the `'t` parser lifetime,
+//! `ParserInput`, `SourceLocation` and the `Impl` item of the pseudo traits.
+//! Upstream still builds against the older set, so a sync conflict here is
+//! resolved by keeping the new API, not by taking the upstream side.
 
-use cssparser::{CowRcStr, Parser as CssParser, SourceLocation, ToCss};
+use cssparser::{CowRcStr, ParseError, Parser as CssParser, ToCss};
 use precomputed_hash::PrecomputedHash;
 use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
 use selectors::bloom::BloomFilter;
@@ -124,7 +130,6 @@ pub enum PseudoClass {
 }
 
 impl NonTSPseudoClassTrait for PseudoClass {
-    type Impl = Impl;
     fn is_active_or_hover(&self) -> bool {
         matches!(
             self,
@@ -256,9 +261,7 @@ const PSEUDO_ELEMENTS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PseudoElement(pub String);
 
-impl PseudoElementTrait for PseudoElement {
-    type Impl = Impl;
-}
+impl PseudoElementTrait for PseudoElement {}
 
 impl ToCss for PseudoElement {
     fn to_css<W: fmt::Write>(&self, dest: &mut W) -> fmt::Result {
@@ -270,7 +273,7 @@ struct SelParser;
 
 impl<'i> parser::Parser<'i> for SelParser {
     type Impl = Impl;
-    type Error = SelectorParseErrorKind<'i>;
+    type Error = SelectorParseErrorKind;
 
     fn parse_is_and_where(&self) -> bool {
         true
@@ -301,9 +304,8 @@ impl<'i> parser::Parser<'i> for SelParser {
 
     fn parse_non_ts_pseudo_class(
         &self,
-        location: SourceLocation,
         name: CowRcStr<'i>,
-    ) -> Result<PseudoClass, cssparser::ParseError<'i, Self::Error>> {
+    ) -> Result<PseudoClass, ParseError<Self::Error>> {
         let lower = name.to_ascii_lowercase();
         if let Some(n) = STATE_PSEUDOS.iter().find(|n| **n == lower) {
             return Ok(PseudoClass::State(n));
@@ -314,19 +316,17 @@ impl<'i> parser::Parser<'i> for SelParser {
         if let Some(n) = NEVER_PSEUDOS.iter().find(|n| **n == lower) {
             return Ok(PseudoClass::Never(n));
         }
-        Err(
-            location.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-                name,
-            )),
-        )
+        Err(ParseError::custom(
+            SelectorParseErrorKind::UnsupportedPseudoClassOrElement,
+        ))
     }
 
-    fn parse_non_ts_functional_pseudo_class<'t>(
+    fn parse_non_ts_functional_pseudo_class(
         &self,
         name: CowRcStr<'i>,
-        parser: &mut CssParser<'i, 't>,
+        parser: &mut CssParser<'i>,
         _after_part: bool,
-    ) -> Result<PseudoClass, cssparser::ParseError<'i, Self::Error>> {
+    ) -> Result<PseudoClass, ParseError<Self::Error>> {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
             "lang" => {
@@ -354,33 +354,30 @@ impl<'i> parser::Parser<'i> for SelParser {
                 while parser.next_including_whitespace().is_ok() {}
                 Ok(PseudoClass::Never("host-context"))
             }
-            _ => Err(parser.new_custom_error(
-                SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),
+            _ => Err(ParseError::custom(
+                SelectorParseErrorKind::UnsupportedPseudoClassOrElement,
             )),
         }
     }
 
     fn parse_pseudo_element(
         &self,
-        location: SourceLocation,
         name: CowRcStr<'i>,
-    ) -> Result<PseudoElement, cssparser::ParseError<'i, Self::Error>> {
+    ) -> Result<PseudoElement, ParseError<Self::Error>> {
         let lower = name.to_ascii_lowercase();
         if PSEUDO_ELEMENTS.contains(&lower.as_str()) || lower.starts_with("-webkit-") {
             return Ok(PseudoElement(lower));
         }
-        Err(
-            location.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-                name,
-            )),
-        )
+        Err(ParseError::custom(
+            SelectorParseErrorKind::UnsupportedPseudoClassOrElement,
+        ))
     }
 
-    fn parse_functional_pseudo_element<'t>(
+    fn parse_functional_pseudo_element(
         &self,
         name: CowRcStr<'i>,
-        parser: &mut CssParser<'i, 't>,
-    ) -> Result<PseudoElement, cssparser::ParseError<'i, Self::Error>> {
+        parser: &mut CssParser<'i>,
+    ) -> Result<PseudoElement, ParseError<Self::Error>> {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
             "highlight"
@@ -396,8 +393,8 @@ impl<'i> parser::Parser<'i> for SelParser {
                 while parser.next_including_whitespace().is_ok() {}
                 Ok(PseudoElement(lower))
             }
-            _ => Err(parser.new_custom_error(
-                SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),
+            _ => Err(ParseError::custom(
+                SelectorParseErrorKind::UnsupportedPseudoClassOrElement,
             )),
         }
     }
@@ -421,8 +418,7 @@ pub struct Selector {
 impl Selector {
     /// Parse a selector list; `Err(())` where Chrome would throw `SyntaxError`.
     pub fn parse(text: &str) -> Result<Selector, ()> {
-        let mut input = cssparser::ParserInput::new(text);
-        let mut p = CssParser::new(&mut input);
+        let mut p = CssParser::new(text);
         SelectorList::parse(&SelParser, &mut p, ParseRelative::No)
             .map(|list| Selector { list })
             .map_err(|_| ())

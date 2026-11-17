@@ -140,7 +140,7 @@ fn unwrap_synthesized_wrappers(html: &mut Html, source: &str) {
         let target = html.tree.root().descendants().find(|n| {
             n.value()
                 .as_element()
-                .is_some_and(|e| e.name.ns == html5ever::ns!(html) && e.name.local.as_ref() == name)
+                .is_some_and(|e| e.name.ns == html5ever::ns!(html) && &*e.name.local == name)
         });
         let Some(target) = target else {
             continue;
@@ -445,7 +445,7 @@ impl std::hash::Hash for StaticElement<'_> {
 fn node_is_plain_tag(n: &NodeRef<'_, Node>) -> bool {
     match n.value() {
         Node::Element(e) => {
-            let name = e.name.local.as_ref();
+            let name: &str = &e.name.local;
             !name.eq_ignore_ascii_case("script") && !name.eq_ignore_ascii_case("style")
         }
         _ => false,
@@ -468,12 +468,12 @@ impl<'a> StaticElement<'a> {
 
     /// JS `el.tagName.toLowerCase()` (htmlparser2 lowercases tag names).
     pub fn tag_lower(&self) -> String {
-        self.elem().name.local.as_ref().to_ascii_lowercase()
+        (&*self.elem().name.local).to_ascii_lowercase()
     }
 
     /// JS `el.tagName` (upper-cased).
     pub fn tag_upper(&self) -> String {
-        self.elem().name.local.as_ref().to_ascii_uppercase()
+        (&*self.elem().name.local).to_ascii_uppercase()
     }
 
     /// JS `getAttribute(name)`: `null` when absent.

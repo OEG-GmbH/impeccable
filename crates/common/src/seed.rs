@@ -27,7 +27,7 @@ fn is_hex(v: &str, len: usize) -> bool {
 /// generator fails.
 pub fn random_hex32() -> Option<String> {
     let mut b = [0u8; 16];
-    getrandom::getrandom(&mut b).ok()?;
+    getrandom::fill(&mut b).ok()?;
     Some(hex(&b))
 }
 

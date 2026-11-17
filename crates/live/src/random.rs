@@ -4,7 +4,7 @@
 /// the OS source is unavailable, which is not expected).
 pub fn random_uuid() -> String {
     let mut b = [0u8; 16];
-    if getrandom::getrandom(&mut b).is_err() {
+    if getrandom::fill(&mut b).is_err() {
         let t = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())

@@ -421,7 +421,7 @@ fn mkdtemp(prefix: &str) -> Option<String> {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for _ in 0..100 {
         let mut b = [0u8; 6];
-        if getrandom::getrandom(&mut b).is_err() {
+        if getrandom::fill(&mut b).is_err() {
             let t = crate::util::now_ms() as u64;
             for (i, x) in b.iter_mut().enumerate() {
                 *x = ((t >> (i * 7)) & 0xff) as u8;
