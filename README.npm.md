@@ -90,7 +90,7 @@ impeccable detect [options] [file-or-dir-or-url...]
 - For URL scans, an installed Chrome, Chromium, or Edge (set `IMPECCABLE_BROWSER` to point at one).
 - Behind a TLS-inspecting proxy, downloads trust your OS certificate store as well as the bundled Mozilla roots. Set `SSL_CERT_FILE` or `SSL_CERT_DIR` to use a specific CA bundle instead.
 
-Binary lookup order: `IMPECCABLE_BIN`, the platform package, `~/.impeccable/bin/<version>/`, then a download of the pinned version into that cache. Set `IMPECCABLE_BIN` to a local build to skip all of that.
+Binary lookup (this fork): only the platform package. It runs when its sha256 is listed in `skill/scripts/engine-checksums.txt`, it is a regular file owned like the shim, and neither it nor its package directories are writable by group or others. There is no `IMPECCABLE_BIN`, no user cache and no download.
 
 ## Part of Impeccable
 

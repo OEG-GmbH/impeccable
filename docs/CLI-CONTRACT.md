@@ -1271,6 +1271,12 @@ The Rust post-edit, before-edit, and Stop hooks resolve design rules per target 
 
 `baseCwd = entry.cwd (string) || cwd`. Target = `env.IMPECCABLE_HOOK_LOG` (string) else `readConfig(baseCwd).auditLog`; if none → return false (no-op). Expand `~/` with `$HOME || $USERPROFILE || '.'`; relative → `path.resolve(baseCwd, target)`. `mkdir -p`, append one NDJSON line: `JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n'` (entry's own `ts` overrides). Never throws.
 
+**Fork (differs from the upstream contract above):**
+- `hook.auditLog` from the project config is repository content, so it may only name a path inside the project: relative to `baseCwd`, no `..`. A `~/…` or absolute `auditLog` is refused (return false, nothing written).
+- `IMPECCABLE_HOOK_LOG`, set by the operator, may still be relative, `~/…` (base: `$HOME`/`$USERPROFILE`, no `.` fallback) or absolute (base: `/`).
+- Every path component below that base is opened with `openat(O_DIRECTORY | O_NOFOLLOW)` and the log with `O_APPEND | O_NOFOLLOW` relative to it: a symlink anywhere below the base makes the write fail (return false) instead of leaving the base. `..` is refused in every form.
+- Migrating an existing config: replace `"auditLog": "~/x.ndjson"` (or an absolute path) with a project-relative path such as `".impeccable/audit.ndjson"`, or keep the home/absolute target and set it through `IMPECCABLE_HOOK_LOG` instead.
+
 #### 0.9 Detector loading: `loadDetector()`
 
 Candidates in order: `<scripts>/detector/detect-antipatterns.mjs` (built skill layout; the build copies `cli/engine/**` to `scripts/detector/**`), `<scripts>/../../cli/engine/detect-antipatterns.mjs`, `<scripts>/../../../cli/engine/detect-antipatterns.mjs`. First existing is dynamically imported; cached module-wide; returns `{ detectText, detectHtml, loadDesignSystemForCwd }` or `null`. Detector option passed by the hook: `{ designSystem? }` only. Findings shape (from `cli/engine/findings.mjs`): `{ antipattern, name, description, severity ('warning' default), category, file, line (0 for html engine), snippet, advisory?: true }`; design-system findings additionally carry `ignoreValue`. Both engines apply inline `impeccable-disable*` comment waivers by default (`inlineIgnores !== false`).
@@ -1324,7 +1330,7 @@ Candidates in order: `<scripts>/detector/detect-antipatterns.mjs` (built skill l
   - `IMPECCABLE_HOOK_DISABLED` truthy → skip `'env-disabled'`.
   - `IMPECCABLE_HOOK_QUIET` truthy → quiet mode (no clean/pending acks; findings still emitted).
   - `IMPECCABLE_HOOK_HARNESS` = `cursor|github|claude|codex|hermes` forces the harness; the Hermes plugin sets `hermes` on both its passes. `vscode` (set by the plugin manifest) applies only to an event no shape check claims (see `resolveHarness`).
-  - `IMPECCABLE_HOOK_LOG` = audit NDJSON path (overrides `hook.auditLog`).
+  - `IMPECCABLE_HOOK_LOG` = audit NDJSON path (overrides `hook.auditLog`; Fork: the only way to log to `~/…` or an absolute path, see 0.8).
   - `IMPECCABLE_HOOK_DEBUG` set → unexpected top-level exceptions written to stderr as `[impeccable-hook] <err>\n`.
   - `CURSOR_PROJECT_DIR` — project dir fallback for cursor/github events.
   - `HOME`/`USERPROFILE` for `~/` audit paths; `IMPECCABLE_CONTEXT_DIR` indirectly via `loadContext`.
@@ -1515,7 +1521,7 @@ Node runtime guard in every built command: `node -e "process.exit(Math.min(parse
   "hook": {
     "enabled": true,               // false disables hook.mjs + hook-before-edit.mjs (not manual detect)
     "quiet": false,                // true: no clean/pending acks
-    "auditLog": "path.ndjson",     // NDJSON audit log (relative to project root, ~/ ok)
+    "auditLog": ".impeccable/audit.ndjson", // NDJSON audit log, relative to the project root (Fork: no ~/, no absolute path, no ..; use IMPECCABLE_HOOK_LOG for those)
     "perEditRules": "immediate",   // or "all"
     "consent": "accepted",         // written by CLI installer / hook-admin on (local file)
     "limits": { "maxFindings": 5, "maxChars": 8000, "maxFileBytes": 131072 },
