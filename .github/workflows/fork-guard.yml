@@ -1,0 +1,31 @@
+# Checks that the patches of this fork survive every merge of upstream.
+# Only the shell guard runs here (no build, no Rust tests): see tools/fork-guard.sh.
+name: fork-guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the fork guard
+        run: sh tools/fork-guard.sh
+      - name: Hold every guard line against its failure case
+        run: sh tools/fork-guard-selftest.sh
