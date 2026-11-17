@@ -636,12 +636,14 @@ function syncRootPluginPayloads(distDir, rootDir) {
  * self-contained for installs without egress. Opt-in only
  * (IMPECCABLE_BUNDLE_ENGINE=1 on a release build), and only after the root
  * harness dirs and ./plugin have been synced from dist: those are
- * git-delivered and must stay launcher-only (the binaries are gitignored and
- * the launcher downloads them on first run).
+ * git-delivered and must stay launcher-only (the binaries are gitignored).
+ * Fork: the launcher downloads nothing, so a launcher-only copy runs no
+ * engine until the fork build is placed at scripts/bin/<os>-<arch>/ next to
+ * it; until then it exits 3 ("engine ... is not installed").
  *
  * Source: skill/scripts/bin/, filled by scripts/fetch-engine.mjs --all. A
- * target that could not be fetched is reported and left out; the launcher
- * covers it at run time.
+ * target that could not be fetched is reported and left out; its copies stay
+ * launcher-only.
  */
 async function stageEngineBinaries(rootDir, distDir) {
   await fetchEngineMain(['--all', '--lenient']);
@@ -649,7 +651,7 @@ async function stageEngineBinaries(rootDir, distDir) {
   const present = ENGINE_TARGETS.filter(t => fs.existsSync(path.join(binRoot, t, binaryName(t))));
   const missing = ENGINE_TARGETS.filter(t => !present.includes(t));
   if (present.length === 0) {
-    console.warn(`⚠️  No engine binaries for v${readEngineVersion(rootDir)}; zips ship launcher-only (the launcher downloads on first run).`);
+    console.warn(`⚠️  No engine binaries for v${readEngineVersion(rootDir)}; zips ship launcher-only (place the fork engine build next to the launcher, scripts/bin/<os>-<arch>/).`);
     return;
   }
   let copies = 0;
@@ -998,8 +1000,8 @@ async function build() {
   // Staged before optional engine bundling to keep the VSIX launcher-only.
   stageVSCodeExtension(ROOT_DIR, DIST_DIR);
 
-  // Release zips ship launcher-only by default: the launcher downloads the
-  // pinned engine on first run. IMPECCABLE_BUNDLE_ENGINE=1 opts in to staging
+  // Release zips ship launcher-only by default (in this fork the launcher
+  // downloads nothing; place the fork build next to it). IMPECCABLE_BUNDLE_ENGINE=1 opts in to staging
   // every fetched target into every dist skill copy for offline installs.
   // That was the default once and put universal.zip at ~340 MB (five targets
   // times every provider copy), past the 25 MB Cloudflare Pages file cap that

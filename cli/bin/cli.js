@@ -1,17 +1,19 @@
 #!/usr/bin/env node
-// `impeccable` npm shim: finds the platform binary and execs it with argv.
-// Order: $IMPECCABLE_BIN, the @impeccable/cli-<os>-<arch> optional dependency,
-// the version-pinned user cache (~/.impeccable/bin/<version>/), then a
-// download into that cache from the public release channel. The cache and the
-// download are verified against skill/scripts/engine-checksums.txt (shipped in
-// the package); a <binary>.verified stamp holding the manifest digest and the
-// binary's size records that a cached binary passed, until either changes or
-// the binary is newer than the stamp.
+// `impeccable` npm shim, this fork: finds the platform binary and execs it with
+// argv. The one candidate is the @impeccable/cli-<os>-<arch> optional
+// dependency (no IMPECCABLE_BIN, no user cache, no download). It runs only
+// when its sha256 is listed in skill/scripts/engine-checksums.txt (shipped in
+// the package); it is hashed on every run. Upstream platform packages are not
+// listed, so only a fork build passes. Hash and spawn open the path twice, so
+// before hashing the shim requires a regular file (no symlink) owned like
+// this shim, with neither it nor any directory above it, up to the one it
+// shares with this shim (node_modules, the @impeccable scope included),
+// writable by group or others: whoever could still swap it could also
+// rewrite this shim.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,24 +26,9 @@ const EXE = OS === 'windows' ? 'impeccable.exe' : 'impeccable';
 const PLATFORM_PKG = `@impeccable/cli-${TARGET}`;
 // The engine version travels as the pinned optionalDependency range.
 const VERSION = String(pkg.optionalDependencies?.[PLATFORM_PKG] || Object.values(pkg.optionalDependencies || {})[0] || '').replace(/^[^\d]*/, '');
-const CACHE_ROOT = process.env.IMPECCABLE_HOME || path.join(os.homedir(), '.impeccable');
-const CACHED = path.join(CACHE_ROOT, 'bin', VERSION, EXE);
-const BASE = (process.env.IMPECCABLE_DOWNLOAD_BASE || 'https://github.com/pbakaus/impeccable/releases/download').replace(/\/$/, '');
 const ASSET = `impeccable-${TARGET}${OS === 'windows' ? '.exe' : ''}`;
-const URL = `${BASE}/engine-v${VERSION}/${ASSET}`;
 const MANIFEST = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'skill', 'scripts', 'engine-checksums.txt');
-const STAMP = `${CACHED}.verified`;
 
-function exists(p) { try { return !!p && fs.statSync(p).isFile(); } catch { return false; } }
-// A stamp counts only while it holds an accepted digest and the binary's size,
-// and the binary has not changed since it was written.
-function stampValid(accepted) {
-  try {
-    const [digest, size] = fs.readFileSync(STAMP, 'utf8').trim().split(/\s+/);
-    const bin = fs.statSync(CACHED);
-    return accepted.includes(digest) && size === String(bin.size) && bin.mtimeMs <= fs.statSync(STAMP).mtimeMs;
-  } catch { return false; }
-}
 // The digest MANIFEST records for this version and asset, or '' when none.
 function expectedDigest(wanted = ASSET) {
   try {
@@ -55,62 +42,73 @@ function expectedDigest(wanted = ASSET) {
 function fromPackage() {
   try { return path.join(path.dirname(require.resolve(`${PLATFORM_PKG}/package.json`)), 'bin', EXE); } catch { return null; }
 }
-async function download() {
-  if (!VERSION) return null;
-  // Fail closed, like the skill launcher and `impeccable install`: no digest
-  // on record refuses the download before any request, and nothing is written
-  // until the hash matches, so a refusal leaves the cache dir untouched.
-  const expected = expectedDigest();
-  if (!expected) {
-    throw new Error(`no checksum for engine ${VERSION} (${ASSET}) in ${MANIFEST}; refusing the unverified download`);
+// `bin` and every directory above it up to and including the closest one that
+// also holds this shim. Renaming any of them swaps the binary, so all must be
+// checked, the @impeccable scope directory too (Codex review).
+function chainToShim(bin) {
+  const shimDir = path.dirname(fileURLToPath(import.meta.url));
+  const chain = [bin];
+  for (let d = path.dirname(bin); ; d = path.dirname(d)) {
+    chain.push(d);
+    const rel = path.relative(d, shimDir);
+    if (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) break;
+    if (path.dirname(d) === d) break;
   }
-  const res = await fetch(URL, { redirect: 'follow' });
-  if (!res.ok) {
-    if (res.status >= 500 && res.status < 600) {
-      const host = new globalThis.URL(res.url).hostname;
-      const github = host === 'github.com' || host.endsWith('.github.com')
-        || host === 'githubusercontent.com' || host.endsWith('.githubusercontent.com');
-      const detail = github
-        ? `GitHub's downloads are failing right now (HTTP ${res.status} from ${host}). This is an outage on GitHub's side, not a problem with your setup or the CLI, so updating won't help. Check https://www.githubstatus.com and run the same command again once GitHub has recovered.`
-        : `${host} is failing right now (HTTP ${res.status}), a server error on ${host}'s side. Try again later.`;
-      process.stderr.write(`impeccable: could not download engine ${VERSION}: ${detail}\n`);
+  return chain;
+}
+// True when every path of chainToShim(bin) is owned by the owner of this shim
+// and none is a symlink or writable by group or others; else false with the
+// reason on stderr. (Windows: mode bits do not describe ACLs, and the fork
+// lists no Windows digest.)
+function privateChain(bin) {
+  const owner = fs.statSync(fileURLToPath(import.meta.url)).uid;
+  for (const p of chainToShim(bin)) {
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink()) {
+      process.stderr.write(`impeccable: ${p} is a symlink; refusing to run the engine\n`);
+      return false;
     }
+    if (st.uid !== owner) {
+      process.stderr.write(`impeccable: ${p} belongs to uid ${st.uid}, the shim to uid ${owner}; refusing to run the engine\n`);
+      return false;
+    }
+    if (st.mode & 0o022) {
+      process.stderr.write(`impeccable: ${p} is writable by group or others (mode ${(st.mode & 0o777).toString(8)}); refusing to run the engine\n`);
+      return false;
+    }
+  }
+  return true;
+}
+// The absolute path of `candidate` when it is a file whose sha256 is listed,
+// else null with the reason on stderr. The returned absolute path is the one
+// that was hashed and the one that runs.
+function verified(candidate) {
+  if (!candidate) return null;
+  const abs = path.resolve(candidate);
+  let bytes;
+  try {
+    if (!fs.lstatSync(abs).isFile()) {
+      process.stderr.write(`impeccable: ${abs} is not a regular file (or is a symlink); refusing to run it\n`);
+      return null;
+    }
+    if (process.platform !== 'win32' && !privateChain(abs)) return null;
+    bytes = fs.readFileSync(abs);
+  } catch { return null; }
+  // Windows on ARM runs x64 binaries.
+  const accepted = [expectedDigest(), TARGET === 'windows-arm64' && expectedDigest('impeccable-windows-x64.exe')].filter(Boolean);
+  if (accepted.length === 0) {
+    process.stderr.write(`impeccable: no checksum for engine ${VERSION} (${ASSET}) in ${MANIFEST}; refusing to run ${abs}\n`);
     return null;
   }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (createHash('sha256').update(buf).digest('hex') !== expected) {
-    throw new Error(`checksum mismatch downloading ${URL}`);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (!accepted.includes(digest)) {
+    process.stderr.write(`impeccable: checksum mismatch for ${abs} (sha256 ${digest}); refusing to run it\n`);
+    return null;
   }
-  fs.mkdirSync(path.dirname(CACHED), { recursive: true });
-  const tmp = `${CACHED}.part.${process.pid}`;
-  try {
-    fs.writeFileSync(tmp, buf, { mode: 0o755 });
-    fs.renameSync(tmp, CACHED);
-  } catch (err) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
-    throw err;
-  }
-  try { fs.writeFileSync(STAMP, `${expected} ${buf.length}\n`); } catch { /* next run hashes again */ }
-  return CACHED;
+  return abs;
 }
-async function locate() {
-  const envBin = process.env.IMPECCABLE_BIN;
-  if (exists(envBin)) return envBin;
-  const fromPkg = fromPackage();
-  if (exists(fromPkg)) return fromPkg;
-  if (exists(CACHED)) {
-    // Windows on ARM runs x64 binaries, and the launchers fall back to that asset.
-    const accepted = [expectedDigest(), TARGET === 'windows-arm64' && expectedDigest('impeccable-windows-x64.exe')].filter(Boolean);
-    if (stampValid(accepted)) return CACHED;
-    let digest = '';
-    try { digest = createHash('sha256').update(fs.readFileSync(CACHED)).digest('hex'); } catch { /* unreadable: unverified */ }
-    if (digest && accepted.includes(digest)) {
-      try { fs.writeFileSync(STAMP, `${digest} ${fs.statSync(CACHED).size}\n`); } catch { /* read-only cache: verified this run */ }
-      return CACHED;
-    }
-    process.stderr.write(`impeccable: cannot verify the cached engine ${CACHED} against ${MANIFEST}; downloading engine ${VERSION} again\n`);
-  }
-  return download().catch((err) => { process.stderr.write(`impeccable: ${err.message}\n`); return null; });
+function locate() {
+  return verified(fromPackage());
 }
 
 // `--version` / `-v` is answered by the shim itself: the number users mean
@@ -121,11 +119,11 @@ if (argv[0] === '--version' || argv[0] === '-v') {
   process.exit(0);
 }
 
-const bin = await locate();
+const bin = locate();
 if (!bin) {
   process.stderr.write(
-    `impeccable: no binary for ${TARGET}. Install ${PLATFORM_PKG}@${VERSION}, set IMPECCABLE_BIN, `
-    + `or download impeccable-${TARGET} v${VERSION} from ${BASE} into ${CACHED}.\n`,
+    `impeccable: no verified engine binary for ${TARGET}. This fork downloads nothing: `
+    + `install ${PLATFORM_PKG} with the fork build listed in ${MANIFEST}.\n`,
   );
   process.exit(127);
 }
