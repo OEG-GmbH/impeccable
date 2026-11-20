@@ -1278,8 +1278,11 @@ pub fn choose_copy_edit_agent(
         .get("IMPECCABLE_LIVE_COPY_AGENT")
         .cloned()
         .unwrap_or_default();
+    // Fork: with no variable the engine never starts `codex` or `claude` itself
+    // (upstream defaults to "auto", which probes and then runs them). They stay
+    // available through an explicit IMPECCABLE_LIVE_COPY_AGENT=codex|claude|auto.
     let mode = if raw.is_empty() {
-        "auto".to_string()
+        "chat".to_string()
     } else {
         impeccable_context::util::js_trim(&raw).to_lowercase()
     };
@@ -1702,4 +1705,48 @@ fn run_agent_process(
             .unwrap_or_else(|| "null".to_string()),
     };
     Err(format!("{} exited with {}", command, what))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fork: without IMPECCABLE_LIVE_COPY_AGENT the engine never starts codex or claude.
+    // Fake `codex` and `claude` on PATH leave a marker when they are run at all, even
+    // for `--version`.
+    #[test]
+    fn copy_edit_agent_defaults_to_chat_and_never_runs_a_cli() {
+        let dir = mkdtemp("impeccable-fake-cli-").unwrap();
+        let marker = jsp::join(&[&dir, "ran"]);
+        for name in ["codex", "claude"] {
+            let path = jsp::join(&[&dir, name]);
+            std::fs::write(&path, format!("#!/bin/sh\necho {name} >> '{marker}'\nexit 0\n")).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{dir}:{old_path}"));
+
+        let env = Env::new();
+        let chat_yes = || true;
+        let chat_no = || false;
+        let chosen = choose_copy_edit_agent(&env, Some(&chat_yes));
+        let none = choose_copy_edit_agent(&env, Some(&chat_no));
+        let none_without_chat = choose_copy_edit_agent(&env, None);
+        // The explicit variable still reaches the CLI (it only checks `--version`).
+        let mut explicit = Env::new();
+        explicit.insert("IMPECCABLE_LIVE_COPY_AGENT".to_string(), "codex".to_string());
+        let explicit_choice = choose_copy_edit_agent(&explicit, None);
+        let ran_after_explicit = std::fs::read_to_string(&marker).unwrap_or_default();
+
+        std::env::set_var("PATH", old_path);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(chosen.as_deref(), Some("chat"));
+        assert_eq!(none, None);
+        assert_eq!(none_without_chat, None);
+        assert_eq!(explicit_choice.as_deref(), Some("codex"));
+        // Only the explicit choice ran a CLI; the three default calls ran nothing.
+        assert_eq!(ran_after_explicit.trim(), "codex", "{ran_after_explicit:?}");
+    }
 }

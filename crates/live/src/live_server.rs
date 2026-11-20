@@ -2493,7 +2493,8 @@ fn handle_manual_edit_commit(
     let requested_mode = env
         .get("IMPECCABLE_LIVE_COPY_AGENT")
         .cloned()
-        .unwrap_or_else(|| "auto".to_string())
+        // Fork: "chat" without the variable; codex and claude only by explicit choice.
+        .unwrap_or_else(|| "chat".to_string())
         .trim()
         .to_ascii_lowercase();
     let chat_active = || lock(shared).chat_agent_likely_active();
