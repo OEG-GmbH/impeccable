@@ -1,12 +1,17 @@
-# Builds the fork engine (linux-x64) twice on separate runners, compares the two
-# sha256 values and, when they are equal, publishes the binary as a release with
-# SHA256SUMS and a build provenance attestation, then lists the digest in every
-# engine-checksums.txt on main. The launchers run only a binary whose digest is
-# listed there, so a new upstream state yields a new, verifiable binary without
-# a hand-edited checksum.
+# Builds the fork engine for linux-x64 and darwin-arm64, each twice on separate
+# runners, compares the two sha256 values per platform and, when every pair is
+# equal, publishes both binaries as one release with SHA256SUMS and a build
+# provenance attestation, then lists the digests in every engine-checksums.txt
+# on main. The launchers run only a binary whose digest is listed there, so a
+# new upstream state yields a new, verifiable binary without a hand-edited
+# checksum. A platform whose two builds differ blocks the whole release.
 #
-# The build recipe is tools/build-engine.sh (pinned image digest, fetch with
-# network, build with --network none). Run it by hand to reproduce a release.
+# The build recipes are tools/build-engine.sh (linux-x64: pinned image digest,
+# fetch with network, build with --network none) and tools/build-engine-macos.sh
+# (darwin-arm64: pinned toolchain, fetch with network, build inside a
+# network-denying sandbox). Run them by hand to reproduce a release.
+# tools/verify-launcher.sh runs the real launcher against every fresh build,
+# good and tampered.
 name: fork-engine
 
 on:
@@ -26,85 +31,111 @@ on:
 
 permissions: {}
 
-env:
-  ASSET: impeccable-linux-x64
-
 jobs:
   build:
-    name: build (${{ matrix.build }})
-    runs-on: ubuntu-24.04
+    name: build ${{ matrix.platform }} (${{ matrix.build }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux-x64, darwin-arm64]
         build: [a, b]
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            script: tools/build-engine.sh
+          # arm64 runner; the Xcode command line tools of the image are the one
+          # thing the recipe cannot pin, see tools/build-engine-macos.sh.
+          - platform: darwin-arm64
+            runner: macos-14
+            script: tools/build-engine-macos.sh
+    env:
+      ASSET: impeccable-${{ matrix.platform }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build the engine
-        run: sh tools/build-engine.sh "$RUNNER_TEMP/out"
+        env:
+          SCRIPT: ${{ matrix.script }}
+          # A different output path per build: a path that leaks into the binary
+          # shows up as a digest difference.
+          OUT: ${{ runner.temp }}/out-${{ matrix.build }}
+        run: sh "$SCRIPT" "$OUT"
+      - name: Run the launcher against the build, good and tampered
+        env:
+          OUT: ${{ runner.temp }}/out-${{ matrix.build }}
+        run: sh tools/verify-launcher.sh "$OUT/$ASSET"
       - name: Keep the binary and its digest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: engine-${{ matrix.build }}
+          name: engine-${{ matrix.platform }}-${{ matrix.build }}
           path: |
-            ${{ runner.temp }}/out/${{ env.ASSET }}
-            ${{ runner.temp }}/out/${{ env.ASSET }}.sha256
+            ${{ runner.temp }}/out-${{ matrix.build }}/${{ env.ASSET }}
+            ${{ runner.temp }}/out-${{ matrix.build }}/${{ env.ASSET }}.sha256
           if-no-files-found: error
           retention-days: 7
 
   compare:
-    name: compare the two builds
+    name: compare the builds
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
-      digest: ${{ steps.cmp.outputs.digest }}
+      digest_linux_x64: ${{ steps.cmp.outputs.digest_linux_x64 }}
+      digest_darwin_arm64: ${{ steps.cmp.outputs.digest_darwin_arm64 }}
       version: ${{ steps.cmp.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Download both builds
+      - name: Download all builds
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: engine-*
+          pattern: engine-*-?
           path: builds
       - name: Compare the sha256 values
         id: cmp
         run: |
           set -eu
-          a=$(sha256sum "builds/engine-a/$ASSET" | cut -d' ' -f1)
-          b=$(sha256sum "builds/engine-b/$ASSET" | cut -d' ' -f1)
-          # The recorded digest must match the bytes as well, else the artifact changed in transit.
-          [ "$a" = "$(cut -d' ' -f1 "builds/engine-a/$ASSET.sha256")" ] || { echo "build a: recorded digest differs from the binary"; exit 1; }
-          [ "$b" = "$(cut -d' ' -f1 "builds/engine-b/$ASSET.sha256")" ] || { echo "build b: recorded digest differs from the binary"; exit 1; }
-          echo "build a: $a"
-          echo "build b: $b"
-          [ -n "$a" ] && [ "$a" = "$b" ] || { echo "::error::the two builds differ, nothing is published"; exit 1; }
           version=$(tr -d ' \t\r\n' < ENGINE_VERSION)
           [ -n "$version" ] || { echo "::error::ENGINE_VERSION is empty"; exit 1; }
-          echo "digest=$a" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          mkdir verified
           {
             echo "### Engine build $version"
             echo "- source: \`$GITHUB_SHA\`"
-            echo "- build a: \`$a\`"
-            echo "- build b: \`$b\`"
-            echo "- result: equal"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Keep the verified binary
+          for platform in linux-x64 darwin-arm64; do
+            asset=impeccable-$platform
+            a=$(sha256sum "builds/engine-$platform-a/$asset" | cut -d' ' -f1)
+            b=$(sha256sum "builds/engine-$platform-b/$asset" | cut -d' ' -f1)
+            # The recorded digest must match the bytes as well, else the artifact changed in transit.
+            [ "$a" = "$(cut -d' ' -f1 "builds/engine-$platform-a/$asset.sha256")" ] || { echo "$platform build a: recorded digest differs from the binary"; exit 1; }
+            [ "$b" = "$(cut -d' ' -f1 "builds/engine-$platform-b/$asset.sha256")" ] || { echo "$platform build b: recorded digest differs from the binary"; exit 1; }
+            echo "$platform build a: $a"
+            echo "$platform build b: $b"
+            [ -n "$a" ] && [ "$a" = "$b" ] || { echo "::error::the two $platform builds differ, nothing is published"; exit 1; }
+            echo "digest_$(printf %s "$platform" | tr - _)=$a" >> "$GITHUB_OUTPUT"
+            cp "builds/engine-$platform-a/$asset" "verified/$asset"
+            {
+              echo "- $platform build a: \`$a\`"
+              echo "- $platform build b: \`$b\`"
+              echo "- $platform result: equal"
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Keep the verified binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: engine-verified
-          path: builds/engine-a/${{ env.ASSET }}
+          path: verified/
           if-no-files-found: error
           retention-days: 7
 
@@ -119,7 +150,7 @@ jobs:
       tag: ${{ steps.rel.outputs.tag }}
       url: ${{ steps.rel.outputs.url }}
     steps:
-      - name: Download the verified binary
+      - name: Download the verified binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: engine-verified
@@ -129,33 +160,37 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          DIGEST: ${{ needs.compare.outputs.digest }}
+          DIGEST_LINUX: ${{ needs.compare.outputs.digest_linux_x64 }}
+          DIGEST_DARWIN: ${{ needs.compare.outputs.digest_darwin_arm64 }}
           VERSION: ${{ needs.compare.outputs.version }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -eu
           tag="engine-fork-$VERSION-$RUN_NUMBER"
           cd dist
-          [ "$(sha256sum "$ASSET" | cut -d' ' -f1)" = "$DIGEST" ] || { echo "::error::downloaded binary differs from the compared digest"; exit 1; }
-          sha256sum "$ASSET" > SHA256SUMS
+          [ "$(sha256sum impeccable-linux-x64 | cut -d' ' -f1)" = "$DIGEST_LINUX" ] || { echo "::error::downloaded linux-x64 binary differs from the compared digest"; exit 1; }
+          [ "$(sha256sum impeccable-darwin-arm64 | cut -d' ' -f1)" = "$DIGEST_DARWIN" ] || { echo "::error::downloaded darwin-arm64 binary differs from the compared digest"; exit 1; }
+          sha256sum impeccable-linux-x64 impeccable-darwin-arm64 > SHA256SUMS
           cat > notes.md <<EOF
-          Fork build of the impeccable engine $VERSION (linux-x64), built twice on separate runners with identical sha256.
+          Fork build of the impeccable engine $VERSION (linux-x64 and darwin-arm64), each built twice on separate runners with identical sha256.
 
           - source commit: \`$GITHUB_SHA\`
-          - sha256: \`$DIGEST\`
-          - recipe: \`sh tools/build-engine.sh <absolute outdir>\` at that commit (pinned rust image, build without network)
-          - provenance: \`gh attestation verify $ASSET --repo $GH_REPO\`
+          - linux-x64 sha256: \`$DIGEST_LINUX\`
+          - darwin-arm64 sha256: \`$DIGEST_DARWIN\`
+          - recipes at that commit: \`sh tools/build-engine.sh <absolute outdir>\` (linux-x64, pinned rust image, build without network) and \`sh tools/build-engine-macos.sh <absolute outdir>\` (darwin-arm64, pinned toolchain, build in a network-denying sandbox)
+          - provenance: \`gh attestation verify <asset> --repo $GH_REPO\`
           EOF
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release $tag exists (re-run): checking its asset instead of replacing it"
+            echo "release $tag exists (re-run): checking its assets instead of replacing them"
           else
-            gh release create "$tag" "$ASSET" SHA256SUMS --target "$GITHUB_SHA" \
+            gh release create "$tag" impeccable-linux-x64 impeccable-darwin-arm64 SHA256SUMS --target "$GITHUB_SHA" \
               --title "Engine $VERSION (fork build $RUN_NUMBER)" --notes-file notes.md
           fi
-          # Read the published asset back: it must be the compared bytes.
+          # Read the published assets back: they must be the compared bytes.
           mkdir ../readback
-          gh release download "$tag" --dir ../readback --pattern "$ASSET" --pattern SHA256SUMS
-          [ "$(sha256sum "../readback/$ASSET" | cut -d' ' -f1)" = "$DIGEST" ] || { echo "::error::the published asset differs from the compared digest"; exit 1; }
+          gh release download "$tag" --dir ../readback --pattern 'impeccable-*' --pattern SHA256SUMS
+          [ "$(sha256sum ../readback/impeccable-linux-x64 | cut -d' ' -f1)" = "$DIGEST_LINUX" ] || { echo "::error::the published linux-x64 asset differs from the compared digest"; exit 1; }
+          [ "$(sha256sum ../readback/impeccable-darwin-arm64 | cut -d' ' -f1)" = "$DIGEST_DARWIN" ] || { echo "::error::the published darwin-arm64 asset differs from the compared digest"; exit 1; }
           (cd ../readback && sha256sum -c SHA256SUMS)
           url=$(gh release view "$tag" --json url --jq .url)
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -172,23 +207,28 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Download the verified binary
+      - name: Download the verified binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: engine-verified
           path: dist
-      - name: Check the bytes against the compared digest
+      - name: Check the bytes against the compared digests
         env:
-          DIGEST: ${{ needs.compare.outputs.digest }}
+          DIGEST_LINUX: ${{ needs.compare.outputs.digest_linux_x64 }}
+          DIGEST_DARWIN: ${{ needs.compare.outputs.digest_darwin_arm64 }}
         run: |
-          [ "$(sha256sum "dist/$ASSET" | cut -d' ' -f1)" = "$DIGEST" ]
-      - name: Attest the binary
+          set -eu
+          [ "$(sha256sum dist/impeccable-linux-x64 | cut -d' ' -f1)" = "$DIGEST_LINUX" ]
+          [ "$(sha256sum dist/impeccable-darwin-arm64 | cut -d' ' -f1)" = "$DIGEST_DARWIN" ]
+      - name: Attest the binaries
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/${{ env.ASSET }}
+          subject-path: |
+            dist/impeccable-linux-x64
+            dist/impeccable-darwin-arm64
 
   manifests:
-    name: list the digest in engine-checksums.txt
+    name: list the digests in engine-checksums.txt
     needs: [compare, release, attest]
     # Only on main: a dispatch on another branch publishes a release but lists nothing.
     if: github.ref == 'refs/heads/main'
@@ -200,7 +240,8 @@ jobs:
       group: fork-engine-manifests
       cancel-in-progress: false
     env:
-      DIGEST: ${{ needs.compare.outputs.digest }}
+      DIGEST_LINUX: ${{ needs.compare.outputs.digest_linux_x64 }}
+      DIGEST_DARWIN: ${{ needs.compare.outputs.digest_darwin_arm64 }}
       VERSION: ${{ needs.compare.outputs.version }}
       BUILT_SHA: ${{ github.sha }}
     steps:
@@ -215,8 +256,8 @@ jobs:
           set -eu
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # Files whose change makes the built binary stale (the build recipe included).
-          src='crates Cargo.toml Cargo.lock rust-toolchain.toml ENGINE_VERSION tools/build-engine.sh'
+          # Files whose change makes the built binaries stale (the build recipes included).
+          src='crates Cargo.toml Cargo.lock rust-toolchain.toml ENGINE_VERSION tools/build-engine.sh tools/build-engine-macos.sh'
           attempt=0
           while :; do
             attempt=$((attempt + 1))
@@ -224,21 +265,30 @@ jobs:
             git reset --quiet --hard origin/main
             # shellcheck disable=SC2086
             if ! git diff --quiet "$BUILT_SHA" HEAD -- $src; then
-              echo "main moved on in the engine source since $BUILT_SHA: this digest is stale, a newer build lists its own."
+              echo "main moved on in the engine source since $BUILT_SHA: these digests are stale, a newer build lists its own."
               exit 0
             fi
             master=skill/scripts/engine-checksums.txt
-            if grep -qx "$VERSION $ASSET $DIGEST" "$master"; then
-              echo "engine-checksums.txt already lists $VERSION $ASSET $DIGEST"
-              exit 0
-            fi
-            # Replace the line for this version and asset, keep comments and other lines.
-            { grep -vE "^$VERSION[[:space:]]+$ASSET[[:space:]]" "$master" || true; echo "$VERSION $ASSET $DIGEST"; } > "$RUNNER_TEMP/manifest"
+            cp "$master" "$RUNNER_TEMP/manifest"
+            changed=0
+            for entry in "impeccable-linux-x64 $DIGEST_LINUX" "impeccable-darwin-arm64 $DIGEST_DARWIN"; do
+              asset=${entry% *}
+              digest=${entry#* }
+              if grep -qx "$VERSION $asset $digest" "$RUNNER_TEMP/manifest"; then
+                echo "engine-checksums.txt already lists $VERSION $asset $digest"
+                continue
+              fi
+              # Replace the line for this version and asset, keep comments and other lines.
+              { grep -vE "^$VERSION[[:space:]]+$asset[[:space:]]" "$RUNNER_TEMP/manifest" || true; echo "$VERSION $asset $digest"; } > "$RUNNER_TEMP/manifest.new"
+              mv "$RUNNER_TEMP/manifest.new" "$RUNNER_TEMP/manifest"
+              changed=1
+            done
+            [ "$changed" = 1 ] || exit 0
             find . -name engine-checksums.txt -not -path './.git/*' -not -path '*/node_modules/*' -not -path './target/*' |
               while read -r f; do cp "$RUNNER_TEMP/manifest" "$f"; done
             sh tools/fork-guard.sh
             git add -u
-            git commit --quiet -m "chore(engine): list the reproducible build of $(printf %s "$DIGEST" | cut -c1-12)"
+            git commit --quiet -m "chore(engine): list the reproducible builds of $(printf %s "$DIGEST_LINUX" | cut -c1-12) (linux-x64) and $(printf %s "$DIGEST_DARWIN" | cut -c1-12) (darwin-arm64)"
             if git push origin HEAD:main; then
               break
             fi
@@ -247,3 +297,37 @@ jobs:
             sleep 5
           done
           echo "- manifests: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+  listed-check:
+    name: launcher with the listed digest (${{ matrix.platform }})
+    needs: [release, manifests]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: darwin-arm64
+            runner: macos-14
+    steps:
+      - name: Checkout main as listed
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Download the published binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release download "$TAG" --dir "$RUNNER_TEMP/published" --pattern "impeccable-${{ matrix.platform }}"
+      - name: Run the launcher with the checksums of main, good and tampered
+        run: >-
+          sh tools/verify-launcher.sh
+          "$RUNNER_TEMP/published/impeccable-${{ matrix.platform }}"
+          plugin/skills/impeccable/scripts/engine-checksums.txt
