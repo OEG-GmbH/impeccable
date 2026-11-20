@@ -26,7 +26,7 @@ jobs:
           sw_vers; xcodebuild -version || true; pkgutil --pkg-info=com.apple.pkg.CLTools_Executables | head -3 || true
           file "$RUNNER_TEMP/out-a/impeccable-darwin-arm64"
           codesign -dv "$RUNNER_TEMP/out-a/impeccable-darwin-arm64" 2>&1 | head -8 || true
-          otool -l "$RUNNER_TEMP/out-a/impeccable-darwin-arm64" | grep -A3 LC_UUID || true
+          otool -l "$RUNNER_TEMP/out-a/impeccable-darwin-arm64" | grep -c LC_UUID || true
           sh tools/verify-launcher.sh "$RUNNER_TEMP/out-a/impeccable-darwin-arm64"
           mkdir -p "$RUNNER_TEMP/bins"; cp "$RUNNER_TEMP/out-a/impeccable-darwin-arm64" "$RUNNER_TEMP/bins/a"; cp "$RUNNER_TEMP/other/out-b/impeccable-darwin-arm64" "$RUNNER_TEMP/bins/b"
           cmp "$RUNNER_TEMP/bins/a" "$RUNNER_TEMP/bins/b" | head -2 || true

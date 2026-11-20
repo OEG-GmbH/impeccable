@@ -21,8 +21,9 @@
 #   - fixed path prefixes (--remap-path-prefix), CARGO_INCREMENTAL=0,
 #     SOURCE_DATE_EPOCH and a fixed deployment target keep host paths and times
 #     out of the binary; strip = true (Cargo.toml) removes the symbol table, so
-#     no object file paths are left in the Mach-O. The linker's ad-hoc code
-#     signature and LC_UUID are derived from the content only, no extra signing.
+#     no object file paths are left in the Mach-O. The linker's own ad-hoc code
+#     signature is kept as it is (no extra signing); the linker's random-looking
+#     LC_UUID is left out with -no_uuid, see the RUSTFLAGS below.
 # What is NOT pinned: the Xcode command line tools (linker, SDK) of the machine.
 # A different Xcode can give a different binary; the two builds of one CI run
 # share the runner image, which is what the digest comparison relies on.
@@ -61,7 +62,10 @@ export RUSTUP_HOME="$OUT/rustup" CARGO_HOME="$OUT/cargo-home" CARGO_TARGET_DIR="
 export RUSTUP_TOOLCHAIN="$channel"
 export CARGO_INCREMENTAL=0 CARGO_TERM_COLOR=never TZ=UTC LC_ALL=C
 export MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET"
-export RUSTFLAGS="--remap-path-prefix=$ROOT=/build/src --remap-path-prefix=$OUT/cargo-home=/build/cargo --remap-path-prefix=$OUT/rustup=/build/rustup"
+# -no_uuid: the linker's LC_UUID differed between two otherwise identical builds
+# (measured on macos-15 runners: of 19 MB, 16 bytes of the UUID and the one
+# code-signature page hash that covers it); it is not a function of the content.
+export RUSTFLAGS="--remap-path-prefix=$ROOT=/build/src --remap-path-prefix=$OUT/cargo-home=/build/cargo --remap-path-prefix=$OUT/rustup=/build/rustup -C link-arg=-Wl,-no_uuid"
 
 # Network step 1: the toolchain, a private copy, minimal profile, no self update.
 rustup toolchain install "$channel" --profile minimal --no-self-update --target "$TARGET"
