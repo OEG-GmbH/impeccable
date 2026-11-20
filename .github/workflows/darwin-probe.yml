@@ -1,0 +1,31 @@
+name: darwin-probe
+on:
+  push:
+    branches: [probe-darwin]
+permissions: {}
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build a
+        run: sh tools/build-engine-macos.sh "$RUNNER_TEMP/out-a"
+      - name: build b
+        run: sh tools/build-engine-macos.sh "$RUNNER_TEMP/other/out-b"
+      - name: compare and launcher
+        run: |
+          set -eu
+          a=$(shasum -a 256 "$RUNNER_TEMP/out-a/impeccable-darwin-arm64" | cut -d' ' -f1)
+          b=$(shasum -a 256 "$RUNNER_TEMP/other/out-b/impeccable-darwin-arm64" | cut -d' ' -f1)
+          echo "a=$a"; echo "b=$b"
+          sw_vers; xcodebuild -version || true; pkgutil --pkg-info=com.apple.pkg.CLTools_Executables | head -3 || true
+          file "$RUNNER_TEMP/out-a/impeccable-darwin-arm64"
+          codesign -dv "$RUNNER_TEMP/out-a/impeccable-darwin-arm64" 2>&1 | head -8 || true
+          otool -l "$RUNNER_TEMP/out-a/impeccable-darwin-arm64" | grep -A3 LC_UUID || true
+          sh tools/verify-launcher.sh "$RUNNER_TEMP/out-a/impeccable-darwin-arm64"
+          [ "$a" = "$b" ]
