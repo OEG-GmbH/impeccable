@@ -17,14 +17,28 @@ name: fork-engine
 on:
   push:
     branches: [main]
-    # Source of the engine only. The checksum commit this workflow pushes touches
-    # engine-checksums.txt alone, so it never starts another build.
+    # Everything the engine binary is built from or embeds, and the recipe that
+    # builds it. The checksum commit this workflow pushes touches
+    # engine-checksums.txt alone, so it never starts another build. Keep in step
+    # with `src` in the manifests job below.
     paths:
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      - '.cargo/**'
       - 'ENGINE_VERSION'
+      # include_str!/include_bytes! outside crates/ (crates/live/src/browser_assets.rs,
+      # crates/comp-verbs, crates/context, crates/cli, crates/bundle, crates/skills,
+      # crates/account).
+      - 'skill/scripts/*.js'
+      - 'ui/**'
+      - 'browser-bundle/**'
+      - 'scripts/bundle-signing-keys.json'
+      - 'scripts/cli-pro-release-keys.json'
+      - 'tools/build-engine.sh'
+      - 'tools/build-engine-macos.sh'
+      - '.github/workflows/fork-engine.yml'
   workflow_dispatch:
   # For a later sync workflow that calls this one after it merged upstream.
   workflow_call:
@@ -50,7 +64,7 @@ jobs:
           # arm64 runner; the Xcode command line tools of the image are the one
           # thing the recipe cannot pin, see tools/build-engine-macos.sh.
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-15
             script: tools/build-engine-macos.sh
     env:
       ASSET: impeccable-${{ matrix.platform }}
@@ -142,6 +156,8 @@ jobs:
   release:
     name: release
     needs: compare
+    # Only on main: a dispatch on another branch builds and compares, publishes nothing.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -200,6 +216,7 @@ jobs:
   attest:
     name: build provenance
     needs: [compare, release]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -230,7 +247,7 @@ jobs:
   manifests:
     name: list the digests in engine-checksums.txt
     needs: [compare, release, attest]
-    # Only on main: a dispatch on another branch publishes a release but lists nothing.
+    # Only on main, like release and attest.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -244,6 +261,9 @@ jobs:
       DIGEST_DARWIN: ${{ needs.compare.outputs.digest_darwin_arm64 }}
       VERSION: ${{ needs.compare.outputs.version }}
       BUILT_SHA: ${{ github.sha }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Checkout main with history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -254,10 +274,15 @@ jobs:
       - name: Update every manifest copy and push
         run: |
           set -eu
+          # The release the hosts download from must carry both listed assets.
+          assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+          for a in impeccable-linux-x64 impeccable-darwin-arm64; do
+            printf '%s\n' "$assets" | grep -qx "$a" || { echo "::error::release $RELEASE_TAG does not carry $a"; exit 1; }
+          done
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           # Files whose change makes the built binaries stale (the build recipes included).
-          src='crates Cargo.toml Cargo.lock rust-toolchain.toml ENGINE_VERSION tools/build-engine.sh tools/build-engine-macos.sh'
+          src='crates Cargo.toml Cargo.lock rust-toolchain.toml .cargo ENGINE_VERSION skill/scripts/live-browser-session.js skill/scripts/live-browser-dom.js skill/scripts/live-browser-ignores.js skill/scripts/live-browser.js skill/scripts/modern-screenshot.umd.js ui browser-bundle scripts/bundle-signing-keys.json scripts/cli-pro-release-keys.json tools/build-engine.sh tools/build-engine-macos.sh .github/workflows/fork-engine.yml'
           attempt=0
           while :; do
             attempt=$((attempt + 1))
@@ -284,10 +309,16 @@ jobs:
               changed=1
             done
             [ "$changed" = 1 ] || exit 0
+            # engine-release.txt: the one release tag that carries the listed assets.
+            printf '%s\n' "$RELEASE_TAG" > "$RUNNER_TEMP/release"
             find . -name engine-checksums.txt -not -path './.git/*' -not -path '*/node_modules/*' -not -path './target/*' |
-              while read -r f; do cp "$RUNNER_TEMP/manifest" "$f"; done
+              while read -r f; do
+                cp "$RUNNER_TEMP/manifest" "$f"
+                cp "$RUNNER_TEMP/release" "$(dirname "$f")/engine-release.txt"
+              done
             sh tools/fork-guard.sh
             git add -u
+            git ls-files --others --exclude-standard -- '*/engine-release.txt' | while read -r f; do git add -- "$f"; done
             git commit --quiet -m "chore(engine): list the reproducible builds of $(printf %s "$DIGEST_LINUX" | cut -c1-12) (linux-x64) and $(printf %s "$DIGEST_DARWIN" | cut -c1-12) (darwin-arm64)"
             if git push origin HEAD:main; then
               break
@@ -300,7 +331,7 @@ jobs:
 
   listed-check:
     name: launcher with the listed digest (${{ matrix.platform }})
-    needs: [release, manifests]
+    needs: manifests
     if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
@@ -313,7 +344,7 @@ jobs:
           - platform: linux-x64
             runner: ubuntu-24.04
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-15
     steps:
       - name: Checkout main as listed
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -324,8 +355,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.release.outputs.tag }}
-        run: gh release download "$TAG" --dir "$RUNNER_TEMP/published" --pattern "impeccable-${{ matrix.platform }}"
+        run: |
+          set -eu
+          # Exactly the tag the hosts will use, read from main, not the one of this run.
+          tag=$(cat plugin/skills/impeccable/scripts/engine-release.txt)
+          echo "release tag from engine-release.txt: $tag"
+          gh release download "$tag" --dir "$RUNNER_TEMP/published" --pattern "impeccable-${{ matrix.platform }}"
       - name: Run the launcher with the checksums of main, good and tampered
         run: >-
           sh tools/verify-launcher.sh
