@@ -120,6 +120,33 @@ fn stall_feedback_does_not_rebuild_a_nonblocking_plate() {
     }
 }
 
+#[test]
+fn scaffold_reference_page_loads_nothing_from_the_network() {
+    let ws = Workspace::new();
+    let io = ws.io();
+    let spec = json!({
+        "comp": "comp.png",
+        "compSize": {"width": 1440, "height": 900},
+        "palette": [{"hex": "#f4efe6"}],
+        "regions": [{
+            "id": "headline", "kind": "text", "note": "Headline", "text": "Hello",
+            "box": {"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.2},
+            "type": {"comp": {"capHeightPx": 40.0}, "chosen": {"family": "Playfair Display", "weight": 700, "fontSizePx": 56.0}}
+        }]
+    });
+    let out = write_scaffold(&io, &spec);
+    let html = std::fs::read_to_string(ws.path.join(&out.html)).unwrap();
+    let css = std::fs::read_to_string(ws.path.join(&out.css)).unwrap();
+    // The measured face is still named, for a machine that has it installed ...
+    assert!(css.contains("--r-headline-family: 'Playfair Display'"), "{css}");
+    assert!(html.contains("font-family:var(--r-headline-family),sans-serif"), "{html}");
+    // ... but nothing in either file points at a remote host.
+    for (name, text) in [("hero-reference.html", &html), ("layout.css", &css)] {
+        assert!(!text.contains("http://") && !text.contains("https://") && !text.contains("//fonts."), "{name} reaches out: {text}");
+    }
+    assert!(html.contains("href=\"layout.css\""), "{html}");
+}
+
 struct Workspace {
     path: PathBuf,
 }

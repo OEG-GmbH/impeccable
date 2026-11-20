@@ -1028,8 +1028,6 @@ fn write_scaffold(io: &Io, spec: &Value) -> Scaffold {
     let mut vars: Vec<String> = vec![":root {".into()];
     let mut rules: Vec<String> = Vec::new();
     let mut body_parts: Vec<String> = Vec::new();
-    let mut font_links: Vec<String> = Vec::new();
-    let mut seen_links = std::collections::HashSet::new();
     for rr in spec_regions(spec) {
         if rr.get("kind").and_then(Value::as_str) == Some("band") {
             continue;
@@ -1058,14 +1056,6 @@ fn write_scaffold(io: &Io, spec: &Value) -> Scaffold {
                 })
                 .unwrap_or_default();
             vars.push(format!("  --r-{id}-cap: {}px;{font_seg}{fam_seg}", cap as i64));
-        }
-        if let Some(c) = chosen {
-            if let Some(fam) = c.get("family").and_then(Value::as_str) {
-                let key = format!("{fam}:{}", util::fmt_value(c.get("weight").unwrap_or(&Value::Null)));
-                if seen_links.insert(key.clone()) {
-                    font_links.push(key);
-                }
-            }
         }
         rules.push(format!(".r-{id} {{ position: absolute; left: var(--r-{id}-x); top: var(--r-{id}-y); width: var(--r-{id}-w); height: var(--r-{id}-h); }}"));
         let note = rr.get("note").and_then(Value::as_str).unwrap_or(&id);
@@ -1110,48 +1100,17 @@ fn write_scaffold(io: &Io, spec: &Value) -> Scaffold {
     let css = css_lines.join("\n");
     let css_path = format!("{dir}/layout.css");
     let _ = std::fs::write(abs(io, &css_path), &css);
-    let link = if !font_links.is_empty() {
-        let fams = font_links
-            .iter()
-            .map(|f| {
-                let parts: Vec<&str> = f.splitn(2, ':').collect();
-                let fam = parts[0];
-                let wt = parts.get(1).copied().unwrap_or("");
-                format!("family={}:wght@{wt}", encode_family(fam))
-            })
-            .collect::<Vec<_>>()
-            .join("&");
-        format!("  <link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?{fams}&display=swap\">\n")
-    } else {
-        String::new()
-    };
+    // Fork: the reference page names its faces only in layout.css and loads nothing
+    // from the network; a face that is not installed falls back to sans-serif.
     let body_bg = spec.pointer("/palette/0/hex").and_then(Value::as_str).unwrap_or("#fff");
     let comp_name = basename(spec.get("comp").and_then(Value::as_str).unwrap_or(""));
     let html = format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>Scaffold reference: {comp_name}</title>\n{link}  <link rel=\"stylesheet\" href=\"layout.css\">\n  <style>html,body{{margin:0}}body{{background:{body_bg}}}.region{{box-sizing:border-box}}.region.text p{{white-space:pre-wrap}}</style>\n</head>\n<body>\n<!-- Reference only. Every region sits at its measured box inside a comp-aspect frame. Take the boxes (layout.css), keep your own semantic structure. -->\n<main class=\"comp-frame\" style=\"max-width:{w}px\">\n{}\n</main>\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>Scaffold reference: {comp_name}</title>\n  <link rel=\"stylesheet\" href=\"layout.css\">\n  <style>html,body{{margin:0}}body{{background:{body_bg}}}.region{{box-sizing:border-box}}.region.text p{{white-space:pre-wrap}}</style>\n</head>\n<body>\n<!-- Reference only. Every region sits at its measured box inside a comp-aspect frame. Take the boxes (layout.css), keep your own semantic structure. -->\n<main class=\"comp-frame\" style=\"max-width:{w}px\">\n{}\n</main>\n</body>\n</html>\n",
         body_parts.join("\n")
     );
     let html_path = format!("{dir}/hero-reference.html");
     let _ = std::fs::write(abs(io, &html_path), &html);
     Scaffold { dir, css: css_path, html: html_path }
-}
-
-fn encode_family(fam: &str) -> String {
-    // encodeURIComponent(fam).replace(/%20/g, '+')
-    let mut out = String::new();
-    for ch in fam.chars() {
-        if ch == ' ' {
-            out.push('+');
-        } else if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')') {
-            out.push(ch);
-        } else {
-            let mut buf = [0u8; 4];
-            for b in ch.encode_utf8(&mut buf).bytes() {
-                out.push_str(&format!("%{b:02X}"));
-            }
-        }
-    }
-    out
 }
 
 // ---- hero readings ---------------------------------------------------------
