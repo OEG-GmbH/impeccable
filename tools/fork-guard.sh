@@ -115,6 +115,27 @@ if [ "$LIST" = 0 ]; then
   done
 fi
 
+# j) engine-release.txt: the one release tag that carries every asset engine-checksums.txt lists.
+#    One line, engine-fork-<version>-<run>; the hosts download from exactly this tag and search
+#    for none. Every copy next to an engine-checksums.txt is the same as the one in skill/scripts.
+if [ "$LIST" = 0 ]; then
+  rel=skill/scripts/engine-release.txt
+  [ -f "$rel" ] || fail "fork patch j: $rel is missing"
+  [ "$(awk 'END { print NR }' "$rel")" = 1 ] || fail "fork patch j lost: $rel is not exactly one line"
+  tag=$(tr -d '\r\n' < "$rel")
+  printf '%s\n' "$tag" | grep -qE '^engine-fork-[0-9.]+-[0-9]+$' ||
+    fail "fork patch j lost: $rel is not a release tag (engine-fork-<version>-<run>): '$tag'"
+  [ "$(wc -c < "$rel" | tr -d ' ')" = "$((${#tag} + 1))" ] ||
+    fail "fork patch j lost: $rel has stray whitespace or a carriage return"
+  sums=$(find . -path ./target -prune -o -type f -name engine-checksums.txt -print)
+  [ "$(echo "$sums" | grep -c .)" -ge 20 ] || fail "fork patch j: fewer than 20 engine-checksums.txt copies found, the check measures nothing"
+  for c in $sums; do
+    d=$(dirname "$c")
+    [ -f "$d/engine-release.txt" ] || fail "fork patch j lost: $d/engine-release.txt is missing"
+    cmp -s "$d/engine-release.txt" "$rel" || fail "fork patch j lost: $d/engine-release.txt differs from $rel"
+  done
+fi
+
 # d) npm shim: listed binaries only, no download, no cache
 need cli/bin/cli.js 'if (!accepted.includes(digest)) {' d
 deny cli/bin/cli.js 'fetch\(|releases/download|IMPECCABLE_DOWNLOAD_BASE|\.verified|process\.env\.IMPECCABLE_BIN' d \
@@ -158,6 +179,19 @@ deny crates/context/src/serve_question.rs 'src [^;"]*https://fonts\.(googleapis|
   'x = "font-src https://fonts.gstatic.com";' 'x = "style-src https://fonts.googleapis.com";'
 need crates/context/src/serve_question.rs 'const PAGE_CSP: &str = "img-src '"'"'self'"'"' data: blob:";' g
 need crates/context/src/serve_question.rs '.header("content-security-policy", PAGE_CSP).text(&html));' g
+
+# h) the scaffold reference page (build-phase scaffold) loads no font from the network
+deny crates/comp-verbs/src/build_phase.rs 'fonts\.(googleapis|gstatic)\.com' h \
+  'let u = "https://fonts.googleapis.com/css2";' 'let u = "https://fonts.gstatic.com/s";'
+need crates/comp-verbs/src/build_phase/integrity_tests.rs 'fn scaffold_reference_page_loads_nothing_from_the_network()' h
+
+# i) the live copy-edit agent defaults to chat: without IMPECCABLE_LIVE_COPY_AGENT the engine
+#    never starts codex or claude itself (they stay available by explicit variable)
+deny crates/live/src/copy_edit_agent.rs '^[[:space:]]+"auto"\.to_string\(\)$' i \
+  '        "auto".to_string()'
+deny crates/live/src/live_server.rs 'unwrap_or_else\(\|\| "auto"\.to_string\(\)\)' i \
+  '        .unwrap_or_else(|| "auto".to_string())'
+need crates/live/src/copy_edit_agent.rs 'fn copy_edit_agent_defaults_to_chat_and_never_runs_a_cli()' i
 
 # t) behaviour tests of the switches exist (they run elsewhere, this only checks they are there)
 need crates/cli/tests/fork_no_network.rs 'fn no_verb_reaches_a_service_even_with_overrides_and_a_sign_in()' t

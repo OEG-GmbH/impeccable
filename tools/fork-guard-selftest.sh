@@ -180,6 +180,34 @@ for name in impeccable impeccable.cmd engine-checksums.txt; do
   restore "$d/$name"
 done
 
+# j) engine-release.txt: format and copies
+rel=skill/scripts/engine-release.txt
+backup $rel
+append_line $rel 'engine-fork-0.1.25-2'
+expect_red "engine-release.txt has two lines" "$rel is not exactly one line"
+restore $rel
+backup $rel
+printf 'latest\n' >$rel
+expect_red "engine-release.txt is not a release tag" "$rel is not a release tag"
+restore $rel
+backup $rel
+printf 'engine-fork-0.1.25-1\r\n' >$rel
+expect_red "engine-release.txt has a carriage return" "$rel has stray whitespace"
+restore $rel
+backup $rel
+rm $rel
+expect_red "engine-release.txt is missing" "$rel is missing"
+restore $rel
+d=$(dirname "$(printf '%s\n' "$copies" | tail -1)")
+backup "$d/engine-release.txt"
+printf 'engine-fork-0.1.25-9\n' >"$d/engine-release.txt"
+expect_red "engine-release.txt copy drifts" "$d/engine-release.txt differs from $rel"
+restore "$d/engine-release.txt"
+backup "$d/engine-release.txt"
+rm "$d/engine-release.txt"
+expect_red "engine-release.txt copy is missing" "$d/engine-release.txt is missing"
+restore "$d/engine-release.txt"
+
 # f) upstream host or release download in the source
 f=crates/cli/src/router.rs
 backup $f
