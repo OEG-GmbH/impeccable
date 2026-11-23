@@ -2,4 +2,5 @@
 # Fork: the launchers run only the binary next to them when its sha256 is
 # listed here. Only fork builds of the hardened engine are listed; upstream
 # release binaries are not, so they never run.
-0.1.25 impeccable-linux-x64 aaaefd3267adbcaa8a01a130f8ffcd5d2efda50e5e64a7ca3618a681430ab2ab
+0.1.25 impeccable-linux-x64 4ac67d2e0f1f94d37ed5885cf8b955dfb1d8f2167d05fd0cf897ab08a06bf543
+0.1.25 impeccable-darwin-arm64 62ceffa674d2372cc37e0a10177233db831dfe4ed45a16bf1e61f3ce894db4fd
