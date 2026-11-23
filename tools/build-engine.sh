@@ -63,6 +63,15 @@ run bridge ro cargo fetch --locked
 # No network from here on. The offline flag stays set as a second guard.
 run none ro env CARGO_NET_OFFLINE=true cargo build --release --frozen -p impeccable
 
+# ENGINE_TEST=1: the workspace tests in the same image, without network, before the
+# binary is handed out (fork_no_network among them). A red test fails the recipe.
+# The tests build into a separate target directory, so the release binary above
+# stays the one that was compared.
+if [ "${ENGINE_TEST:-}" = 1 ]; then
+  run none ro env CARGO_NET_OFFLINE=true CARGO_TARGET_DIR=/target/test \
+    cargo test --workspace --frozen --no-fail-fast
+fi
+
 cp "$OUT/target/release/impeccable" "$OUT/$ASSET"
 chmod 0755 "$OUT/$ASSET"
 (cd "$OUT" && sha256sum "$ASSET" > "$ASSET.sha256")

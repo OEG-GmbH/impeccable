@@ -6,6 +6,14 @@
 # new upstream state yields a new, verifiable binary without a hand-edited
 # checksum. A platform whose two builds differ blocks the whole release.
 #
+# Build a of linux-x64 also runs the workspace tests (cargo test, network none,
+# same pinned image); a red test blocks the release like a digest difference.
+# After the manifests commit, the package job packs the plugin of main with both
+# binaries into impeccable-plugin.zip (tools/package-plugin.py, packed twice and
+# compared) and adds it to the release. A marketplace pins that zip as an
+# `archive` source (url plus sha256), so Claude Code installs plugin and engine in
+# one verified step.
+#
 # The build recipes are tools/build-engine.sh (linux-x64: pinned image digest,
 # fetch with network, build with --network none) and tools/build-engine-macos.sh
 # (darwin-arm64: pinned toolchain, fetch with network, build inside a
@@ -39,6 +47,10 @@ on:
       - 'tools/build-engine.sh'
       - 'tools/build-engine-macos.sh'
       - '.github/workflows/fork-engine.yml'
+      # Not part of the binary, but of the plugin zip: a change here needs a new zip.
+      # They are left out of `src` in the manifests job on purpose (no stale digests).
+      - 'plugin/**'
+      - 'tools/package-plugin.py'
   workflow_dispatch:
   # For a later sync workflow that calls this one after it merged upstream.
   workflow_call:
@@ -79,6 +91,8 @@ jobs:
           # A different output path per build: a path that leaks into the binary
           # shows up as a digest difference.
           OUT: ${{ runner.temp }}/out-${{ matrix.build }}
+          # Workspace tests once per run, in the linux image without network.
+          ENGINE_TEST: ${{ matrix.platform == 'linux-x64' && matrix.build == 'a' && '1' || '' }}
         run: sh "$SCRIPT" "$OUT"
       - name: Run the launcher against the build, good and tampered
         env:
@@ -328,6 +342,84 @@ jobs:
             sleep 5
           done
           echo "- manifests: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+  package:
+    name: plugin zip
+    needs: [compare, release, manifests]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      commit: ${{ steps.pack.outputs.commit }}
+      zip_sha256: ${{ steps.pack.outputs.zip_sha256 }}
+    env:
+      DIGEST_LINUX: ${{ needs.compare.outputs.digest_linux_x64 }}
+      DIGEST_DARWIN: ${{ needs.compare.outputs.digest_darwin_arm64 }}
+      BUILT_SHA: ${{ github.sha }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout main with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download the verified binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: engine-verified
+          path: ${{ runner.temp }}/engine
+      - name: Pack the plugin twice, compare, publish
+        id: pack
+        run: |
+          set -eu
+          e="$RUNNER_TEMP/engine"
+          [ "$(sha256sum "$e/impeccable-linux-x64" | cut -d' ' -f1)" = "$DIGEST_LINUX" ]
+          [ "$(sha256sum "$e/impeccable-darwin-arm64" | cut -d' ' -f1)" = "$DIGEST_DARWIN" ]
+          # Same staleness rule as the manifests job: a newer engine source on main packs its own zip.
+          src='crates Cargo.toml Cargo.lock rust-toolchain.toml .cargo ENGINE_VERSION skill/scripts/live-browser-session.js skill/scripts/live-browser-dom.js skill/scripts/live-browser-ignores.js skill/scripts/live-browser.js skill/scripts/modern-screenshot.umd.js ui browser-bundle scripts/bundle-signing-keys.json scripts/cli-pro-release-keys.json tools/build-engine.sh tools/build-engine-macos.sh .github/workflows/fork-engine.yml'
+          # shellcheck disable=SC2086
+          if ! git diff --quiet "$BUILT_SHA" HEAD -- $src; then
+            echo "main moved on in the engine source since $BUILT_SHA: no zip from these binaries."
+            exit 0
+          fi
+          commit=$(git rev-parse HEAD)
+          # Two packs from two separate copies of plugin/ must give the same bytes.
+          mkdir "$RUNNER_TEMP/a" "$RUNNER_TEMP/b"
+          git archive "$commit" plugin | tar -x -C "$RUNNER_TEMP/a"
+          git archive "$commit" plugin | tar -x -C "$RUNNER_TEMP/b"
+          python3 -I tools/package-plugin.py "$RUNNER_TEMP/a/plugin" "$e/impeccable-linux-x64" "$e/impeccable-darwin-arm64" "$RUNNER_TEMP/a.zip"
+          python3 -I tools/package-plugin.py "$RUNNER_TEMP/b/plugin" "$e/impeccable-linux-x64" "$e/impeccable-darwin-arm64" "$RUNNER_TEMP/b.zip"
+          cmp "$RUNNER_TEMP/a.zip" "$RUNNER_TEMP/b.zip" || { echo "::error::the two plugin zips differ"; exit 1; }
+          mkdir dist
+          cp "$RUNNER_TEMP/a.zip" dist/impeccable-plugin.zip
+          zsha=$(sha256sum dist/impeccable-plugin.zip | cut -d' ' -f1)
+          (cd dist && sha256sum impeccable-plugin.zip > impeccable-plugin.zip.sha256)
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -qx impeccable-plugin.zip; then
+            echo "release $RELEASE_TAG already carries impeccable-plugin.zip (re-run): checking it instead of replacing it"
+          else
+            gh release upload "$RELEASE_TAG" dist/impeccable-plugin.zip dist/impeccable-plugin.zip.sha256
+          fi
+          mkdir "$RUNNER_TEMP/readback"
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/readback" --pattern impeccable-plugin.zip
+          [ "$(sha256sum "$RUNNER_TEMP/readback/impeccable-plugin.zip" | cut -d' ' -f1)" = "$zsha" ] || { echo "::error::the published plugin zip differs from the packed one"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "zip_sha256=$zsha" >> "$GITHUB_OUTPUT"
+          {
+            echo "- plugin zip: \`impeccable-plugin.zip\` from \`$commit\`, sha256 \`$zsha\`"
+            echo "- marketplace source: \`{\"source\": \"archive\", \"url\": \"https://github.com/$GH_REPO/releases/download/$RELEASE_TAG/impeccable-plugin.zip\", \"sha256\": \"$zsha\"}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest the plugin zip
+        if: steps.pack.outputs.zip_sha256 != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/impeccable-plugin.zip
 
   listed-check:
     name: launcher with the listed digest (${{ matrix.platform }})
