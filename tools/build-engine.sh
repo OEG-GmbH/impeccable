@@ -67,9 +67,22 @@ run none ro env CARGO_NET_OFFLINE=true cargo build --release --frozen -p impecca
 # binary is handed out (fork_no_network among them). A red test fails the recipe.
 # The tests build into a separate target directory, so the release binary above
 # stays the one that was compared.
+#
+# Skipped by exact name: the tests that drive a real Chromium (tests/motion.rs and one
+# test of tests/component_capture.rs). The pinned image has no browser and the run has
+# no network to fetch one. --exact keeps unit tests with the same words in their path
+# (motion::tests::motion_*) running; a new browser test fails loudly instead of being
+# skipped silently.
+BROWSER_TESTS='captures_code_and_png_with_real_pixels_and_rejects_missing_inputs_without_replacing_review
+motion_clipped motion_crossfade_dip motion_crossfade_overexposure motion_entrance_replay motion_grid_gap
+motion_late_hover motion_orphan_linger motion_paint_order_swap motion_playback_rate motion_playback_reverse
+motion_pseudo_twins motion_setup_reaches_the_open_state_before_an_exit motion_shadow_toggle motion_sibling
+motion_smooth motion_swap motion_web_component'
 if [ "${ENGINE_TEST:-}" = 1 ]; then
+  set --
+  for t in $BROWSER_TESTS; do set -- "$@" --skip "$t"; done
   run none ro env CARGO_NET_OFFLINE=true CARGO_TARGET_DIR=/target/test \
-    cargo test --workspace --frozen --no-fail-fast
+    cargo test --workspace --frozen --no-fail-fast -- --exact "$@"
 fi
 
 cp "$OUT/target/release/impeccable" "$OUT/$ASSET"
